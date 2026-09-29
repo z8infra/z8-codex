@@ -3,7 +3,7 @@
 !include "x64.nsh"
 
 !ifndef VERSION
-  !define VERSION "1.3.2"
+  !define VERSION "1.3.5"
 !endif
 !ifndef ARCH
   !define ARCH "x64"

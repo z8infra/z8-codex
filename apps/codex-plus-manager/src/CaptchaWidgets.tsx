@@ -67,11 +67,27 @@ function diagnosticCode(value: unknown): string | null {
   return /^[A-Za-z0-9_.:-]+$/.test(code) ? code : null;
 }
 
+function currentHostname(): string {
+  if (typeof window === "undefined") return "unknown";
+  return window.location.hostname.trim().slice(0, 255) || "unknown";
+}
+
+function runtimeDiagnosticContext(): { hostname: string; origin: string; platform: string; userAgent: string } {
+  const location = typeof window === "undefined" ? null : window.location;
+  const browser = typeof navigator === "undefined" ? null : navigator;
+  return {
+    hostname: location?.hostname.trim().slice(0, 255) || "unknown",
+    origin: location?.origin.trim().slice(0, 512) || "unknown",
+    platform: browser?.platform.trim().slice(0, 128) || "unknown",
+    userAgent: browser?.userAgent.trim().slice(0, 256) || "unknown",
+  };
+}
+
 function logCaptchaFailure(provider: string, phase: string, code?: unknown): string {
   const safeCode = diagnosticCode(code) ?? phase;
   void invoke("write_diagnostic_event", {
     event: "z8_captcha_error",
-    detail: { provider, phase, code: safeCode },
+    detail: { provider, phase, code: safeCode, ...runtimeDiagnosticContext() },
   }).catch(() => {});
   return safeCode;
 }
@@ -136,7 +152,16 @@ function useWidgetLifecycle(resetNonce: number, onProof: (proof: CaptchaProof | 
     setState("failed");
   }, []);
   const retry = useCallback(() => setRetryNonce((value) => value + 1), []);
-  return { state, errorCode, setState, cancelRef, cancel, fail, retry };
+  return { state, errorCode, setState, cancelRef, cancel, fail, retry, retryNonce };
+}
+
+export function captchaFailureText(errorCode?: string | null, hostname = currentHostname()): string {
+  if (errorCode === "110200") {
+    return `Cloudflare 未授权当前桌面端域名（${hostname}，错误码：110200），请在 Turnstile 的 Hostname 管理中加入该域名后重试。`;
+  }
+  return errorCode
+    ? `安全验证加载失败（错误码：${errorCode}），请检查网络后重试。`
+    : "安全验证加载失败，请检查网络后重试。";
 }
 
 function statusText(state: WidgetState, errorCode?: string | null): string {
@@ -144,15 +169,16 @@ function statusText(state: WidgetState, errorCode?: string | null): string {
   if (state === "ready") return "请完成安全验证。";
   if (state === "success") return "安全验证已完成。";
   if (state === "cancelled") return "安全验证已取消，请重试。";
-  return errorCode
-    ? `安全验证加载失败（错误码：${errorCode}），请检查网络后重试。`
-    : "安全验证加载失败，请检查网络后重试。";
+  return captchaFailureText(errorCode);
 }
 
 function WidgetFrame({ state, errorCode, onCancel, onRetry, children }: { state: WidgetState; errorCode?: string | null; onCancel: () => void; onRetry: () => void; children?: ReactNode }) {
   return <div className={`account-captcha ${state}`} aria-live="polite">
     <div className="account-captcha-widget-row">
       <div className="account-captcha-widget">{children}</div>
+    </div>
+    <div className="account-captcha-status-row">
+      <p className="field-hint" role={state === "failed" ? "alert" : "status"}>{statusText(state, errorCode)}</p>
       {state === "failed" || state === "cancelled" ? <button
         type="button"
         className="account-captcha-retry"
@@ -162,9 +188,6 @@ function WidgetFrame({ state, errorCode, onCancel, onRetry, children }: { state:
       >
         <RefreshCw aria-hidden="true" />
       </button> : null}
-    </div>
-    <div className="account-captcha-status-row">
-      <p className="field-hint" role={state === "failed" ? "alert" : "status"}>{statusText(state, errorCode)}</p>
     </div>
     {state === "ready" || state === "loading" ? <button type="button" className="account-captcha-button" onClick={onCancel}>取消验证</button> : null}
   </div>;
@@ -195,6 +218,9 @@ function TurnstileWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps &
           action: "z8_account",
           appearance: "always",
           language: "zh-CN",
+          retry: "auto",
+          "retry-interval": 5000,
+          "refresh-expired": "auto",
           callback: (token: unknown) => {
             const boundedToken = bounded(token);
             if (!active || !boundedToken) {
@@ -220,7 +246,7 @@ function TurnstileWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps &
         if (active) lifecycle.fail(code);
       });
     return () => { active = false; controller.abort(); clear(); onProof(null); };
-  }, [provider.siteKey, resetNonce, lifecycle.retry, lifecycle.setState, lifecycle.fail, lifecycle.cancelRef, onProof]);
+  }, [provider.siteKey, resetNonce, lifecycle.retryNonce, lifecycle.setState, lifecycle.fail, lifecycle.cancelRef, onProof]);
   return <WidgetFrame state={lifecycle.state} errorCode={lifecycle.errorCode} onCancel={lifecycle.cancel} onRetry={lifecycle.retry}><div ref={containerRef} /></WidgetFrame>;
 }
 
@@ -256,7 +282,7 @@ function TencentWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps & {
         if (active) lifecycle.fail(code);
       });
     return () => { active = false; instanceRef.current?.destroy(); instanceRef.current = null; onProof(null); };
-  }, [provider.appId, region, resetNonce, lifecycle.retry, lifecycle.setState, lifecycle.fail, lifecycle.cancelRef, onProof]);
+  }, [provider.appId, region, resetNonce, lifecycle.retryNonce, lifecycle.setState, lifecycle.fail, lifecycle.cancelRef, onProof]);
   return <WidgetFrame state={lifecycle.state} errorCode={lifecycle.errorCode} onCancel={lifecycle.cancel} onRetry={lifecycle.retry}><div ref={containerRef} /><button type="button" className="account-captcha-button" onClick={() => instanceRef.current?.show()} disabled={lifecycle.state !== "ready"}>点击完成安全验证</button></WidgetFrame>;
 }
 
@@ -297,7 +323,7 @@ function AliyunWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps & { 
         if (active) lifecycle.fail(code);
       });
     return () => { active = false; lifecycle.cancelRef.current?.(); onProof(null); };
-  }, [provider.prefix, provider.region, provider.sceneId, resetNonce, lifecycle.retry, lifecycle.setState, lifecycle.fail, lifecycle.cancelRef, onProof, buttonId, elementId]);
+  }, [provider.prefix, provider.region, provider.sceneId, resetNonce, lifecycle.retryNonce, lifecycle.setState, lifecycle.fail, lifecycle.cancelRef, onProof, buttonId, elementId]);
   return <WidgetFrame state={lifecycle.state} errorCode={lifecycle.errorCode} onCancel={lifecycle.cancel} onRetry={lifecycle.retry}><div id={elementId} /><button id={buttonId} type="button" className="account-captcha-button" disabled={lifecycle.state !== "ready"}>点击完成安全验证</button></WidgetFrame>;
 }
 

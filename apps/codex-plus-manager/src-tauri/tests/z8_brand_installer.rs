@@ -27,13 +27,20 @@ fn branded_metadata_uses_one_product_name_and_version() {
     let cargo = read_repo("Cargo.toml");
 
     assert_eq!(tauri["productName"], "Z8 Codex");
-    assert_eq!(tauri["version"], "1.3.2");
+    let version = tauri["version"]
+        .as_str()
+        .expect("tauri metadata should declare a string version");
+    assert!(
+        version.split('.').count() == 3
+            && version
+                .chars()
+                .all(|character| character.is_ascii_digit() || character == '.'),
+        "invalid Tauri version: {version}"
+    );
     assert_eq!(tauri["identifier"], "com.z8.codex.manager");
     assert_eq!(tauri["app"]["windows"][0]["title"], "Z8 Codex");
-    assert_eq!(
-        tauri["bundle"]["resources"]["../../../target/release/codex-plus-plus.exe"],
-        "z8-codex.exe"
-    );
+    assert_eq!(tauri["bundle"]["active"], false);
+    assert_eq!(tauri["bundle"]["macOS"]["infoPlist"], "Info.plist");
     assert_eq!(
         tauri["bundle"]["windows"]["nsis"]["languages"][0],
         "SimpChinese"
@@ -42,11 +49,11 @@ fn branded_metadata_uses_one_product_name_and_version() {
         tauri["bundle"]["windows"]["nsis"]["displayLanguageSelector"],
         false
     );
-    assert_eq!(package["version"], tauri["version"]);
-    assert!(cargo.contains("version = \"1.3.2\""));
+    assert_eq!(package["version"].as_str(), Some(version));
+    assert!(cargo.contains(&format!("version = \"{version}\"")));
 
     let nsi = read_repo("scripts/installer/windows/CodexPlusPlus.nsi");
-    assert!(nsi.contains("!define VERSION \"1.3.2\""));
+    assert!(nsi.contains(&format!("!define VERSION \"{version}\"")));
     assert!(nsi.contains("Name \"Z8 Codex\""));
     assert!(nsi.contains("!insertmacro MUI_LANGUAGE \"SimpChinese\""));
     assert!(nsi.contains("CreateShortcut \"$DESKTOP\\Codex.lnk\""));
@@ -65,7 +72,7 @@ fn branded_metadata_uses_one_product_name_and_version() {
     assert!(nsi.contains("VIAddVersionKey /LANG=${LANG_ENGLISH} \"FileVersion\" \"${VERSION}\""));
 
     let mac = read_repo("scripts/installer/macos/package-dmg.sh");
-    assert!(mac.contains("VERSION=\"${1:-1.3.2}\""));
+    assert!(mac.contains(&format!("VERSION=\"${{1:-{version}}}\"")));
     assert!(mac.contains("create_app \"Z8 Codex\""));
     assert!(mac.contains("create_app \"Z8 Codex 管理工具\""));
     assert!(mac.contains("<string>codexplusplus</string>"));
@@ -207,37 +214,44 @@ fn windows_installer_fails_closed_when_z8_executables_cannot_be_replaced_or_remo
 
 #[test]
 fn windows_release_and_pr_build_package_native_x64_and_arm64_wrappers() {
-    for workflow_path in [
-        ".github/workflows/release-assets.yml",
-        ".github/workflows/pr-build.yml",
+    let release = read_repo(".github/workflows/release-assets.yml");
+    for required in [
+        "runner: windows-latest",
+        "target: x86_64-pc-windows-msvc",
+        "cargo build --release --locked --target ${{ matrix.target }}",
+        "target/${{ matrix.target }}/release/codex-plus-plus.exe",
+        "target/${{ matrix.target }}/release/codex-plus-plus-manager.exe",
+        "dist/windows/app/z8-codex.exe",
+        "dist/windows/app/z8-codex-manager.exe",
+        "verify-pe-machine.ps1",
+        "/DARCH=${{ matrix.arch }}",
     ] {
-        let workflow = read_repo(workflow_path);
-        for required in [
-            "runner: windows-latest",
-            "target: x86_64-pc-windows-msvc",
-            "runner: windows-11-arm",
-            "target: aarch64-pc-windows-msvc",
-            "cargo build --release --locked --target ${{ matrix.target }}",
-            "target/${{ matrix.target }}/release/codex-plus-plus.exe",
-            "target/${{ matrix.target }}/release/codex-plus-plus-manager.exe",
-            "dist/windows/app/z8-codex.exe",
-            "dist/windows/app/z8-codex-manager.exe",
-            "verify-pe-machine.ps1",
-            "/DARCH=${{ matrix.arch }}",
-        ] {
-            assert!(
-                workflow.contains(required),
-                "{workflow_path} must contain {required:?}"
-            );
-        }
+        assert!(release.contains(required), "release workflow must contain {required:?}");
+    }
+    assert!(!release.contains("runner: windows-11-arm"));
+    assert!(!release.contains("target: aarch64-pc-windows-msvc"));
+
+    let pr = read_repo(".github/workflows/pr-build.yml");
+    for required in [
+        "runner: windows-latest",
+        "target: x86_64-pc-windows-msvc",
+        "runner: windows-11-arm",
+        "target: aarch64-pc-windows-msvc",
+        "cargo build --release --locked --target ${{ matrix.target }}",
+        "target/${{ matrix.target }}/release/codex-plus-plus.exe",
+        "target/${{ matrix.target }}/release/codex-plus-plus-manager.exe",
+        "dist/windows/app/z8-codex.exe",
+        "dist/windows/app/z8-codex-manager.exe",
+        "verify-pe-machine.ps1",
+        "/DARCH=${{ matrix.arch }}",
+    ] {
+        assert!(pr.contains(required), "PR workflow must contain {required:?}");
     }
 
-    let release = read_repo(".github/workflows/release-assets.yml");
     assert!(release.contains("Z8Codex-$version-windows-${{ matrix.arch }}.zip"));
     assert!(release.contains("dist/windows/*.exe"));
     assert!(release.contains("- windows-installer"));
 
-    let pr = read_repo(".github/workflows/pr-build.yml");
     assert!(pr.contains("Z8Codex-windows-${{ matrix.arch }}-installer"));
     assert!(pr.contains("Z8Codex-windows-${{ matrix.arch }}-binaries"));
 
@@ -289,11 +303,10 @@ fn macos_workflows_verify_the_branded_bundles_created_by_the_dmg_script() {
         assert!(!pr.contains(stale));
     }
     assert!(release.contains("dist/macos/*.dmg"));
-    assert!(!release.contains("Build macOS zip asset"));
-    assert!(!release.contains("dist/macos/*.zip"));
+    assert!(release.contains("Build macOS zip asset"));
+    assert!(release.contains("dist/macos/*.zip"));
     assert!(pr.contains("Z8Codex-macos-${{ matrix.arch }}-dmg"));
     assert!(release.contains("Copy-Item LICENSE dist/windows/app/"));
-    assert!(release.contains("- source-compliance"));
     let windows_job = release
         .split("  windows-installer:")
         .nth(1)
@@ -305,11 +318,31 @@ fn macos_workflows_verify_the_branded_bundles_created_by_the_dmg_script() {
         .split("  macos-dmg:")
         .nth(1)
         .expect("macOS release job")
-        .split("  source-compliance:")
+        .split("  latest-json:")
         .next()
         .expect("macOS release job end");
-    assert!(windows_job.contains("needs: source-compliance"));
-    assert!(macos_job.contains("needs: source-compliance"));
+    assert!(windows_job.contains("needs: prepare-release"));
+    assert!(macos_job.contains("needs: prepare-release"));
+}
+
+#[test]
+fn release_assets_stay_draft_until_all_platform_assets_are_ready() {
+    let release = read_repo(".github/workflows/release-assets.yml");
+    assert!(release.contains("--draft"));
+    assert!(release.contains("Verify release is draft before asset uploads"));
+    assert!(release.contains("isDraft"));
+    assert!(release.contains("gh release upload \"$TAG\" latest.json --clobber"));
+    assert!(release.contains("gh release edit \"$TAG\" --draft=false --latest"));
+    assert!(release.contains("- windows-installer"));
+    assert!(release.contains("- macos-dmg"));
+}
+
+#[test]
+fn pr_build_does_not_duplicate_the_full_matrix_on_main_pushes() {
+    let pr = read_repo(".github/workflows/pr-build.yml");
+    assert!(pr.contains("  pull_request:"));
+    assert!(pr.contains("  workflow_dispatch:"));
+    assert!(!pr.contains("  push:\n    branches: [main]"));
 }
 
 #[test]
