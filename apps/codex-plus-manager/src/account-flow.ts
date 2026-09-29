@@ -289,6 +289,10 @@ export function accountFailureMessage(message: string, preserveExistingAccount =
   const normalized = message.trim();
   const code = normalized.split(":", 1)[0];
   const copy = ACCOUNT_ERROR_COPY[code] ?? SAFE_COMMAND_MESSAGE_COPY[normalized] ?? "账户操作未完成，请重试。";
-  if (!preserveExistingAccount) return copy;
-  return `${copy} 现有账户状态已保留。`;
+  // Stable codes are safe to expose and make platform-specific failures
+  // actionable when a user reports an issue from the desktop client.
+  const hasStableCode = /^account_[a-z0-9_]+$/.test(code);
+  const diagnosticCopy = hasStableCode ? `${copy} 错误代码：${code}` : copy;
+  if (!preserveExistingAccount) return diagnosticCopy;
+  return `${diagnosticCopy} 现有账户状态已保留。`;
 }

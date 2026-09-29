@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { RefreshCw } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import type { CaptchaProvider } from "./account-flow";
 
 export type CaptchaProof = {
@@ -51,11 +53,27 @@ declare global {
 
 const SCRIPT_TIMEOUT_MS = 30_000;
 const TOKEN_LIMIT = 4096;
+const DIAGNOSTIC_CODE_LIMIT = 128;
 
 function bounded(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const result = value.trim();
   return result.length > 0 && result.length <= TOKEN_LIMIT ? result : null;
+}
+
+function diagnosticCode(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const code = String(value).trim().slice(0, DIAGNOSTIC_CODE_LIMIT);
+  return /^[A-Za-z0-9_.:-]+$/.test(code) ? code : null;
+}
+
+function logCaptchaFailure(provider: string, phase: string, code?: unknown): string {
+  const safeCode = diagnosticCode(code) ?? phase;
+  void invoke("write_diagnostic_event", {
+    event: "z8_captcha_error",
+    detail: { provider, phase, code: safeCode },
+  }).catch(() => {});
+  return safeCode;
 }
 
 function loadScript(id: string, src: string, ready: () => boolean): Promise<void> {
@@ -94,11 +112,13 @@ function loadScript(id: string, src: string, ready: () => boolean): Promise<void
 function useWidgetLifecycle(resetNonce: number, onProof: (proof: CaptchaProof | null) => void) {
   const onProofRef = useRef(onProof);
   const [state, setState] = useState<WidgetState>("loading");
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const cancelRef = useRef<(() => void) | null>(null);
   useEffect(() => { onProofRef.current = onProof; }, [onProof]);
   useEffect(() => {
     setState("loading");
+    setErrorCode(null);
     cancelRef.current = null;
     onProofRef.current(null);
     return () => { cancelRef.current?.(); cancelRef.current = null; };
@@ -107,26 +127,46 @@ function useWidgetLifecycle(resetNonce: number, onProof: (proof: CaptchaProof | 
     cancelRef.current?.();
     cancelRef.current = null;
     onProofRef.current(null);
+    setErrorCode(null);
     setState("cancelled");
   }, []);
+  const fail = useCallback((code?: unknown) => {
+    setErrorCode(diagnosticCode(code));
+    onProofRef.current(null);
+    setState("failed");
+  }, []);
   const retry = useCallback(() => setRetryNonce((value) => value + 1), []);
-  return { state, setState, cancelRef, cancel, retry };
+  return { state, errorCode, setState, cancelRef, cancel, fail, retry };
 }
 
-function statusText(state: WidgetState): string {
+function statusText(state: WidgetState, errorCode?: string | null): string {
   if (state === "loading") return "正在准备安全验证…";
   if (state === "ready") return "请完成安全验证。";
   if (state === "success") return "安全验证已完成。";
   if (state === "cancelled") return "安全验证已取消，请重试。";
-  return "安全验证加载失败，请检查网络后重试。";
+  return errorCode
+    ? `安全验证加载失败（错误码：${errorCode}），请检查网络后重试。`
+    : "安全验证加载失败，请检查网络后重试。";
 }
 
-function WidgetFrame({ state, onCancel, onRetry, children }: { state: WidgetState; onCancel: () => void; onRetry: () => void; children?: ReactNode }) {
+function WidgetFrame({ state, errorCode, onCancel, onRetry, children }: { state: WidgetState; errorCode?: string | null; onCancel: () => void; onRetry: () => void; children?: ReactNode }) {
   return <div className={`account-captcha ${state}`} aria-live="polite">
-    {children}
-    <p className="field-hint" role={state === "failed" ? "alert" : "status"}>{statusText(state)}</p>
+    <div className="account-captcha-widget-row">
+      <div className="account-captcha-widget">{children}</div>
+      {state === "failed" || state === "cancelled" ? <button
+        type="button"
+        className="account-captcha-retry"
+        onClick={onRetry}
+        aria-label="重试安全验证"
+        title="重试安全验证"
+      >
+        <RefreshCw aria-hidden="true" />
+      </button> : null}
+    </div>
+    <div className="account-captcha-status-row">
+      <p className="field-hint" role={state === "failed" ? "alert" : "status"}>{statusText(state, errorCode)}</p>
+    </div>
     {state === "ready" || state === "loading" ? <button type="button" className="account-captcha-button" onClick={onCancel}>取消验证</button> : null}
-    {state === "failed" || state === "cancelled" ? <button type="button" className="account-captcha-button" onClick={onRetry}>重试验证</button> : null}
   </div>;
 }
 
@@ -157,18 +197,31 @@ function TurnstileWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps &
           language: "zh-CN",
           callback: (token: unknown) => {
             const boundedToken = bounded(token);
-            if (!active || !boundedToken) { lifecycle.setState("failed"); lifecycle.cancelRef.current?.(); return; }
+            if (!active || !boundedToken) {
+              const code = logCaptchaFailure("cloudflare_turnstile", "token", "captcha_invalid_token");
+              if (active) lifecycle.fail(code);
+              return;
+            }
             lifecycle.setState("success");
             onProof({ turnstileToken: boundedToken });
           },
-          "expired-callback": () => { if (active) { lifecycle.setState("failed"); onProof(null); } },
-          "error-callback": () => { if (active) { lifecycle.setState("failed"); onProof(null); } },
+          "expired-callback": () => {
+            const code = logCaptchaFailure("cloudflare_turnstile", "expired", "captcha_expired");
+            if (active) lifecycle.fail(code);
+          },
+          "error-callback": (errorCode: unknown) => {
+            const code = logCaptchaFailure("cloudflare_turnstile", "widget_error", errorCode);
+            if (active) lifecycle.fail(code);
+          },
         });
       })
-      .catch(() => { if (active) { lifecycle.setState("failed"); onProof(null); } });
+      .catch((error: unknown) => {
+        const code = logCaptchaFailure("cloudflare_turnstile", "load_error", error instanceof Error ? error.message : "captcha_unavailable");
+        if (active) lifecycle.fail(code);
+      });
     return () => { active = false; controller.abort(); clear(); onProof(null); };
-  }, [provider.siteKey, resetNonce, lifecycle.retry, lifecycle.setState, lifecycle.cancelRef, onProof]);
-  return <WidgetFrame state={lifecycle.state} onCancel={lifecycle.cancel} onRetry={lifecycle.retry}><div ref={containerRef} /></WidgetFrame>;
+  }, [provider.siteKey, resetNonce, lifecycle.retry, lifecycle.setState, lifecycle.fail, lifecycle.cancelRef, onProof]);
+  return <WidgetFrame state={lifecycle.state} errorCode={lifecycle.errorCode} onCancel={lifecycle.cancel} onRetry={lifecycle.retry}><div ref={containerRef} /></WidgetFrame>;
 }
 
 function TencentWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps & { provider: Extract<CaptchaProvider, { kind: "tencent" }> }) {
@@ -188,17 +241,23 @@ function TencentWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps & {
           const ticket = bounded(result.ticket);
           const randstr = bounded(result.randstr);
           if (result.ret === 0 && ticket && randstr && !ticket.startsWith("trerror_")) { lifecycle.setState("success"); onProof({ tencentCaptchaTicket: ticket, tencentCaptchaRandstr: randstr }); }
-          else { lifecycle.setState("failed"); onProof(null); }
+          else {
+            const code = logCaptchaFailure("tencent", "callback", result.ret ?? "captcha_failed");
+            lifecycle.fail(code);
+          }
         };
         instanceRef.current = region === "intl"
           ? new window.TencentCaptcha(containerRef.current, provider.appId, callback, { enableAutoCheck: false, userLanguage: "zh-cn", type: "popup" })
           : new window.TencentCaptcha(provider.appId, callback, { userLanguage: "zh-cn" });
         lifecycle.setState("ready");
       })
-      .catch(() => { if (active) { lifecycle.setState("failed"); onProof(null); } });
+      .catch((error: unknown) => {
+        const code = logCaptchaFailure("tencent", "load_error", error instanceof Error ? error.message : "captcha_unavailable");
+        if (active) lifecycle.fail(code);
+      });
     return () => { active = false; instanceRef.current?.destroy(); instanceRef.current = null; onProof(null); };
-  }, [provider.appId, region, resetNonce, lifecycle.retry, lifecycle.setState, lifecycle.cancelRef, onProof]);
-  return <WidgetFrame state={lifecycle.state} onCancel={lifecycle.cancel} onRetry={lifecycle.retry}><div ref={containerRef} /><button type="button" className="account-captcha-button" onClick={() => instanceRef.current?.show()} disabled={lifecycle.state !== "ready"}>点击完成安全验证</button></WidgetFrame>;
+  }, [provider.appId, region, resetNonce, lifecycle.retry, lifecycle.setState, lifecycle.fail, lifecycle.cancelRef, onProof]);
+  return <WidgetFrame state={lifecycle.state} errorCode={lifecycle.errorCode} onCancel={lifecycle.cancel} onRetry={lifecycle.retry}><div ref={containerRef} /><button type="button" className="account-captcha-button" onClick={() => instanceRef.current?.show()} disabled={lifecycle.state !== "ready"}>点击完成安全验证</button></WidgetFrame>;
 }
 
 function AliyunWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps & { provider: Extract<CaptchaProvider, { kind: "aliyun" }> }) {
@@ -222,7 +281,10 @@ function AliyunWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps & { 
           captchaVerifyCallback: (param: unknown) => {
             const proof = bounded(param);
             if (active && proof) { lifecycle.setState("success"); onProof({ turnstileToken: proof }); }
-            else if (active) { lifecycle.setState("failed"); onProof(null); }
+            else if (active) {
+              const code = logCaptchaFailure("aliyun", "callback", "captcha_failed");
+              lifecycle.fail(code);
+            }
             return { captchaResult: Boolean(proof) };
           },
           onBizResultCallback: () => {},
@@ -230,10 +292,13 @@ function AliyunWidget({ provider, resetNonce, onProof }: CaptchaWidgetProps & { 
         });
         lifecycle.setState("ready");
       })
-      .catch(() => { if (active) { lifecycle.setState("failed"); onProof(null); } });
+      .catch((error: unknown) => {
+        const code = logCaptchaFailure("aliyun", "load_error", error instanceof Error ? error.message : "captcha_unavailable");
+        if (active) lifecycle.fail(code);
+      });
     return () => { active = false; lifecycle.cancelRef.current?.(); onProof(null); };
-  }, [provider.prefix, provider.region, provider.sceneId, resetNonce, lifecycle.retry, lifecycle.setState, lifecycle.cancelRef, onProof, buttonId, elementId]);
-  return <WidgetFrame state={lifecycle.state} onCancel={lifecycle.cancel} onRetry={lifecycle.retry}><div id={elementId} /><button id={buttonId} type="button" className="account-captcha-button" disabled={lifecycle.state !== "ready"}>点击完成安全验证</button></WidgetFrame>;
+  }, [provider.prefix, provider.region, provider.sceneId, resetNonce, lifecycle.retry, lifecycle.setState, lifecycle.fail, lifecycle.cancelRef, onProof, buttonId, elementId]);
+  return <WidgetFrame state={lifecycle.state} errorCode={lifecycle.errorCode} onCancel={lifecycle.cancel} onRetry={lifecycle.retry}><div id={elementId} /><button id={buttonId} type="button" className="account-captcha-button" disabled={lifecycle.state !== "ready"}>点击完成安全验证</button></WidgetFrame>;
 }
 
 export function CaptchaChallenge({ provider, resetNonce, onProof }: CaptchaWidgetProps) {

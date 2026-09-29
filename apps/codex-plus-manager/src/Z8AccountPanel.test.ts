@@ -119,11 +119,15 @@ test("failed account commands are not treated as state commits", () => {
 test("account failures keep the existing account and explain unavailable steps", () => {
   assert.equal(
     accountFailureMessage("account_two_factor_required: 需要二次验证"),
-    "账户需要完成双因素验证，请输入二次验证码。",
+    "账户需要完成双因素验证，请输入二次验证码。 错误代码：account_two_factor_required",
   );
   assert.equal(
     accountFailureMessage("account_invalid_credentials: invalid", true),
-    "邮箱或密码错误，请重试。 现有账户状态已保留。",
+    "邮箱或密码错误，请重试。 错误代码：account_invalid_credentials 现有账户状态已保留。",
+  );
+  assert.equal(
+    accountFailureMessage("account_backend_admin_only: restricted"),
+    "账户操作未完成，请重试。 错误代码：account_backend_admin_only",
   );
   assert.equal(accountFailureMessage("server detail [credential removed]"), "账户操作未完成，请重试。");
 });

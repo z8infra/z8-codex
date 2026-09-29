@@ -282,7 +282,20 @@ fn command_error<T: Serialize + Default>(error: impl Into<String>) -> CommandRes
 }
 
 fn account_error<T: Serialize + Default>(error: AccountError) -> CommandResult<T> {
+    // Keep account failures available in the in-app diagnostic log without
+    // persisting the server message, email address, or any proof/token data.
+    let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
+        "z8.account.error",
+        account_error_log_detail(&error),
+    );
     command_error(error.to_string())
+}
+
+fn account_error_log_detail(error: &AccountError) -> serde_json::Value {
+    serde_json::json!({
+        "code": error.stable_code(),
+        "retry_after_seconds": error.retry_after_seconds(),
+    })
 }
 
 fn usage_error_message(code: &str) -> &'static str {
@@ -1327,6 +1340,29 @@ pub async fn z8_check_provider(key_id: String) -> CommandResult<HealthCheckResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_error_log_detail_contains_only_safe_diagnostics() {
+        let error = match AccountClient::new("not-a-valid-url") {
+            Ok(_) => panic!("invalid URL should produce a stable account error"),
+            Err(error) => error,
+        };
+        let detail = account_error_log_detail(&error);
+        assert_eq!(
+            detail.get("code").and_then(serde_json::Value::as_str),
+            Some("account_request_invalid")
+        );
+        assert_eq!(
+            detail
+                .get("retry_after_seconds")
+                .and_then(serde_json::Value::as_u64),
+            None
+        );
+        assert!(detail.get("message").is_none());
+        let serialized = detail.to_string();
+        assert!(!serialized.contains("user@example.com"));
+        assert!(!serialized.contains("token-secret"));
+    }
 
     fn test_api_key(id: i64, secret: &str) -> AccountApiKey {
         AccountApiKey::from_persisted_value(&serde_json::json!({
