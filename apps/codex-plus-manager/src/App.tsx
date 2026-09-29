@@ -773,6 +773,54 @@ type UpdateResult = CommandResult<{
   progress?: number;
 }>;
 
+type ReleaseNoteSection = {
+  title: string;
+  items: string[];
+};
+
+function cleanReleaseNoteText(value: string): string {
+  return value
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+}
+
+function parseReleaseNotes(summary?: string): ReleaseNoteSection[] {
+  const lines = (summary || "").split(/\r?\n/);
+  const updateHeading = lines.findIndex((line) => /^##\s+(?:本次更新|更新内容|what's new)\s*$/i.test(line.trim()));
+  const source = updateHeading >= 0 ? lines.slice(updateHeading + 1) : lines;
+  const sections: ReleaseNoteSection[] = [];
+  let current: ReleaseNoteSection | null = null;
+
+  for (const rawLine of source) {
+    const line = rawLine.trim();
+    if (/^##\s+/.test(line)) break;
+    if (!line || /^\|/.test(line) || /^<\/?(?:details|summary)/i.test(line)) continue;
+
+    const heading = line.match(/^###\s+(.+)$/);
+    if (heading) {
+      current = { title: cleanReleaseNoteText(heading[1]), items: [] };
+      sections.push(current);
+      continue;
+    }
+
+    const item = line.match(/^[-*]\s+(.+)$/);
+    if (!item) continue;
+    const text = cleanReleaseNoteText(item[1]);
+    if (!text) continue;
+    if (!current) {
+      current = { title: "", items: [] };
+      sections.push(current);
+    }
+    current.items.push(text);
+  }
+
+  return sections.filter((section) => section.items.length > 0);
+}
+
 function providerSyncProgressMessage(result: CommandResult<ProviderSyncPayload>): string {
   const changed = result.changedSessionFiles ?? 0;
   const rows = result.sqliteRowsUpdated ?? 0;
@@ -7720,10 +7768,7 @@ function UpdateDialog({
   onSkip: () => void;
   onUpdate: () => void;
 }) {
-  const notes = (update.releaseSummary || t("此版本没有附加更新说明。"))
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
-    .filter(Boolean);
+  const noteSections = parseReleaseNotes(update.releaseSummary);
   const installing = progress.active;
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="z8-update-title">
@@ -7737,9 +7782,14 @@ function UpdateDialog({
         </div>
         <div className="update-release-notes">
           <strong>{t("更新内容")}</strong>
-          <ul>
-            {notes.map((note, index) => <li key={`${index}-${note}`}>{note}</li>)}
-          </ul>
+          {noteSections.length > 0 ? noteSections.map((section, sectionIndex) => (
+            <section className="update-release-section" key={`${section.title || "general"}-${sectionIndex}`}>
+              {section.title ? <h3>{section.title}</h3> : null}
+              <ul>
+                {section.items.map((note, index) => <li key={`${index}-${note}`}>{note}</li>)}
+              </ul>
+            </section>
+          )) : <p className="update-release-empty">{t("此版本没有附加更新说明。")}</p>}
         </div>
         {progress.active ? <TaskProgressBox progress={progress} title={t("安装包更新进度")} /> : null}
         {!update.assetUrl ? <p className="field-hint">{t("当前平台没有匹配的安装包，请前往 Release 页面查看。")}</p> : null}

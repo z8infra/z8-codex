@@ -3557,6 +3557,23 @@ body {
   line-height: 1.6;
 }
 
+.update-release-section + .update-release-section {
+  margin-top: 18px;
+}
+
+.update-release-section h3 {
+  margin: 0 0 8px;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.update-release-empty {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.6;
+}
+
 .update-modal-actions {
   justify-content: flex-end;
   margin-top: 16px;
