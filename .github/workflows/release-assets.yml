@@ -126,6 +126,20 @@ jobs:
               --notes-file "$NOTES_FILE"
           fi
 
+      - name: Verify release is draft before asset uploads
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          is_draft="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')"
+          if [[ "$is_draft" != "true" ]]; then
+            echo "Release $TAG is already public; refusing to upload an incomplete asset set." >&2
+            exit 1
+          fi
+
   windows-installer:
     name: Windows installer (${{ matrix.arch }})
     needs: prepare-release
