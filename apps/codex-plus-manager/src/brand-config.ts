@@ -17,8 +17,8 @@ export const Z8_BRAND = {
 } as const;
 
 export const Z8_FEATURES = {
-  /** Z8 发行版不从 Codex++ 上游自动下载或安装更新。 */
-  onlineUpdates: false,
+  /** Z8 发行版从 GitHub Release 获取匹配平台的安装包更新。 */
+  onlineUpdates: true,
   /** 第一版不开放 Zed Remote 项目入口。 */
   zedRemote: false,
 } as const;

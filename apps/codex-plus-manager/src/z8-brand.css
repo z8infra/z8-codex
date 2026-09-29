@@ -871,7 +871,7 @@
 
 .z8-auth-modal {
   width: 100%;
-  max-width: 560px;
+  max-width: 400px;
   max-height: min(720px, calc(100dvh - 28px));
   overflow: auto;
   border-radius: 16px;
@@ -919,15 +919,6 @@
   align-items: flex-start;
   justify-content: flex-end;
   gap: 12px;
-}
-
-.z8-auth-header-actions > p {
-  max-width: 260px;
-  margin: 4px 0 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 13px;
-  line-height: 1.5;
-  text-align: right;
 }
 
 .z8-auth-close {
@@ -1180,10 +1171,6 @@
     padding: 18px !important;
   }
 
-  .z8-auth-header-actions > p {
-    display: none;
-  }
-
   .z8-auth-field-with-action {
     grid-template-columns: 1fr;
   }
@@ -1203,10 +1190,6 @@
 }
 
 @media (max-width: 860px) {
-  .z8-auth-header-actions > p {
-    display: none;
-  }
-
   .z8-auth-field-with-action {
     grid-template-columns: 1fr;
   }

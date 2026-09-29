@@ -237,7 +237,7 @@ fn github_release_workflow_uploads_static_latest_json() {
 }
 
 #[test]
-fn github_release_workflow_publishes_tagged_corresponding_source_and_license() {
+fn github_release_workflow_publishes_tagged_clean_packages_and_license() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let workflow = manifest_dir
         .parent()
@@ -247,17 +247,17 @@ fn github_release_workflow_publishes_tagged_corresponding_source_and_license() {
         .join(".github/workflows/release-assets.yml");
     let workflow = std::fs::read_to_string(&workflow).expect("read release assets workflow");
 
-    assert!(workflow.contains("source-compliance:"));
-    assert!(workflow.contains("git archive --format=tar.gz --prefix=\"$PREFIX\" \"$TAG\""));
-    assert!(workflow.contains("test -f LICENSE"));
+    assert!(workflow.contains("prepare-release:"));
+    assert!(!workflow.contains("source-compliance:"));
     assert!(workflow.contains("Copy-Item LICENSE dist/windows/app/"));
     assert!(workflow.contains("dist/macos/*.dmg"));
-    assert!(!workflow.contains("dist/macos/*.zip"));
-    assert!(workflow.contains("scripts/release/build-third-party-notices.py"));
-    assert!(workflow.contains("*-THIRD-PARTY-NOTICES.md"));
-    assert!(workflow.contains("*-LICENSE.txt"));
-    assert!(workflow.contains("*.SHA256SUMS"));
-    assert!(workflow.contains("- source-compliance"));
+    assert!(workflow.contains("dist/macos/*.zip"));
+    assert!(workflow.contains("/-windows-x64-setup\\.exe$/i"));
+    assert!(workflow.contains("/-windows-x64\\.zip$/i"));
+    assert!(workflow.contains("/-macos-x64\\.dmg$/i"));
+    assert!(workflow.contains("/-macos-x64\\.zip$/i"));
+    assert!(workflow.contains("/-macos-arm64\\.dmg$/i"));
+    assert!(workflow.contains("/-macos-arm64\\.zip$/i"));
 
     let nsi = manifest_dir
         .parent()
@@ -276,17 +276,6 @@ fn github_release_workflow_publishes_tagged_corresponding_source_and_license() {
         .join("scripts/installer/macos/package-dmg.sh");
     let macos = std::fs::read_to_string(&macos).expect("read macOS packager");
     assert!(macos.contains("cp \"$ROOT/LICENSE\" \"$STAGE/LICENSE\""));
-
-    let notice_script = manifest_dir
-        .parent()
-        .and_then(std::path::Path::parent)
-        .and_then(std::path::Path::parent)
-        .unwrap()
-        .join("scripts/release/build-third-party-notices.py");
-    let notice_script = std::fs::read_to_string(&notice_script).expect("read notice generator");
-    assert!(notice_script.contains("\"cargo\", \"metadata\", \"--format-version\""));
-    assert!(notice_script.contains("package-lock.json"));
-    assert!(notice_script.contains("not a complete legal notice"));
 }
 
 #[test]
@@ -495,17 +484,18 @@ fn manager_ui_no_longer_exposes_command_wrapper_or_startup_marketplace_prompt() 
 }
 
 #[test]
-fn manager_update_install_is_disabled_for_z8_release_boundary() {
+fn manager_update_install_keeps_visible_progress_bar() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_tsx = manifest_dir.parent().unwrap().join("src/App.tsx");
     let app_tsx = std::fs::read_to_string(&app_tsx).expect("read manager App.tsx");
     let brand_config = manifest_dir.parent().unwrap().join("src/brand-config.ts");
     let brand_config = std::fs::read_to_string(&brand_config).expect("read Z8 brand config");
 
-    assert!(brand_config.contains("onlineUpdates: false"));
-    assert!(app_tsx.contains("更新由 Z8 发布渠道统一提供"));
-    assert!(app_tsx.contains("当前版本不会在应用内检查或安装更新"));
-    assert!(!app_tsx.contains("下载并运行安装包"));
-    assert!(!app_tsx.contains("updateInstallProgress"));
-    assert!(!app_tsx.contains("安装包更新进度"));
+    assert!(brand_config.contains("onlineUpdates: true"));
+    assert!(app_tsx.contains("下载并运行安装包"));
+    assert!(app_tsx.contains("updateInstallProgress"));
+    assert!(app_tsx.contains("安装包更新进度"));
+    assert!(app_tsx.contains("completedTitle={t(\"上次更新结果\")}"));
+    assert!(app_tsx.contains("progress={updateInstallProgress}"));
+    assert!(app_tsx.contains("z8-codex.update.last-check-date"));
 }
