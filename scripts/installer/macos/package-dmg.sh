@@ -241,7 +241,10 @@ detach_dmg() {
   }
 
   [ -z "$target" ] && return 0
-  for attempt in 1 2 3 4; do
+  # macOS Intel runners can keep the temporary device busy while Finder
+  # finishes releasing the volume. Keep retrying long enough for that delayed
+  # eject instead of failing an otherwise complete package.
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
     if hdiutil detach "$target" >/dev/null 2>&1; then
       return 0
     fi
@@ -263,7 +266,7 @@ detach_dmg() {
       return 0
     fi
 
-    sleep "$attempt"
+    sleep "$((attempt * 2))"
   done
 
   echo "error: failed to detach DMG device: $target" >&2
