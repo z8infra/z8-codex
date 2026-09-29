@@ -110,9 +110,7 @@ jobs:
 
   windows-installer:
     name: Windows installer (${{ matrix.arch }})
-    needs:
-      - prepare-release
-      - source-compliance
+    needs: prepare-release
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -121,9 +119,6 @@ jobs:
           - arch: x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
-          - arch: arm64
-            runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
@@ -147,7 +142,7 @@ jobs:
       - name: Verify native runner and NSIS
         shell: pwsh
         run: |
-          $expected = if ("${{ matrix.arch }}" -eq "arm64") { "Arm64" } else { "X64" }
+          $expected = "X64"
           $actual = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
           if ($actual -ne $expected) { throw "Expected $expected runner, got $actual" }
           $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
@@ -210,9 +205,7 @@ jobs:
 
   macos-dmg:
     name: macOS DMG (${{ matrix.arch }})
-    needs:
-      - prepare-release
-      - source-compliance
+    needs: prepare-release
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -278,54 +271,27 @@ jobs:
             echo "verified: $app"
           done
 
-      - name: Upload macOS DMG
+      - name: Build macOS zip asset
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare-release.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          VERSION="${VERSION#V}"
+          ZIP_ROOT="$RUNNER_TEMP/Z8Codex-${VERSION}-macos-${{ matrix.arch }}"
+          rm -rf "$ZIP_ROOT"
+          mkdir -p "$ZIP_ROOT"
+          cp -R "dist/macos/stage/Z8 Codex.app" "$ZIP_ROOT/"
+          cp -R "dist/macos/stage/Z8 Codex 管理工具.app" "$ZIP_ROOT/"
+          ln -s /Applications "$ZIP_ROOT/Applications"
+          ditto -c -k --sequesterRsrc --keepParent "$ZIP_ROOT" "dist/macos/Z8Codex-${VERSION}-macos-${{ matrix.arch }}.zip"
+
+      - name: Upload macOS packages
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
           files: |
             dist/macos/*.dmg
-
-  source-compliance:
-    name: Publish corresponding source
-    needs: prepare-release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout release tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare-release.outputs.tag }}
-          fetch-depth: 0
-
-      - name: Build source archive and license asset
-        shell: bash
-        env:
-          TAG: ${{ needs.prepare-release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          VERSION="${TAG#v}"
-          VERSION="${VERSION#V}"
-          test -n "$VERSION"
-          test -f LICENSE
-          mkdir -p dist/source
-          PREFIX="Z8Codex-${VERSION}/"
-          git archive --format=tar.gz --prefix="$PREFIX" "$TAG" > "dist/source/Z8Codex-${VERSION}-source.tar.gz"
-          cp LICENSE "dist/source/Z8Codex-${VERSION}-LICENSE.txt"
-          THIRD_PARTY_NOTICES_OUTPUT="dist/source/Z8Codex-${VERSION}-THIRD-PARTY-NOTICES.md" \
-            python scripts/release/build-third-party-notices.py
-          test -s "dist/source/Z8Codex-${VERSION}-source.tar.gz"
-          test -s "dist/source/Z8Codex-${VERSION}-LICENSE.txt"
-          test -s "dist/source/Z8Codex-${VERSION}-THIRD-PARTY-NOTICES.md"
-          sha256sum dist/source/* | sort > "dist/source/Z8Codex-${VERSION}-source.SHA256SUMS"
-
-      - name: Upload source and license assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare-release.outputs.tag }}
-          files: |
-            dist/source/*.tar.gz
-            dist/source/*-LICENSE.txt
-            dist/source/*-THIRD-PARTY-NOTICES.md
-            dist/source/*.SHA256SUMS
+            dist/macos/*.zip
 
   latest-json:
     name: Upload static latest.json
@@ -334,7 +300,6 @@ jobs:
       - prepare-release
       - windows-installer
       - macos-dmg
-      - source-compliance
     steps:
       - name: Generate latest.json
         env:
@@ -358,9 +323,11 @@ jobs:
             .map((name) => ({ name, url: `${baseUrl}/${encodeURIComponent(name)}` }));
           const requiredAssets = [
             /-windows-x64-setup\.exe$/i,
-            /-windows-arm64-setup\.exe$/i,
+            /-windows-x64\.zip$/i,
             /-macos-x64\.dmg$/i,
-            /-macos-arm64\.dmg$/i
+            /-macos-x64\.zip$/i,
+            /-macos-arm64\.dmg$/i,
+            /-macos-arm64\.zip$/i
           ];
           for (const pattern of requiredAssets) {
             if (!assets.some((asset) => pattern.test(asset.name))) {

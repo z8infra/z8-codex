@@ -61,12 +61,11 @@ Z8 Codex 需要本机已经安装官方 Codex 桌面端才能启动会话。首�
 
 ### 安装 Z8 Codex
 
-内部测试包按系统和处理器架构提供：
+发布包按系统和处理器架构提供：
 
-- Windows x64：`Z8Codex-*-windows-x64-setup.exe`
-- Windows ARM64：`Z8Codex-*-windows-arm64-setup.exe`
-- macOS Intel：`Z8Codex-*-macos-x64.dmg`
-- macOS Apple Silicon：`Z8Codex-*-macos-arm64.dmg`
+- Windows x64：安装程序 `Z8Codex-*-windows-x64-setup.exe` 和 ZIP
+- macOS Intel：DMG 和 ZIP（`Z8Codex-*-macos-x64.*`）
+- macOS Apple Silicon：DMG 和 ZIP（`Z8Codex-*-macos-arm64.*`）
 
 安装后打开“Z8 Codex 管理工具”，按以下顺序完成设置：
 
@@ -126,7 +125,7 @@ Apple Silicon 使用 `aarch64-apple-darwin` 和 `arm64` 参数。内部测试包
 
 ### 自动发版
 
-GitHub Actions 会在推送严格的版本标签（例如 `v1.3.3`）后自动创建 GitHub Release，并构建四个安装包：Windows x64、Windows ARM64、macOS Intel 和 macOS Apple Silicon，同时上传源码、许可证、第三方声明、SHA-256 校验文件和 `latest.json`。
+GitHub Actions 会在推送严格的版本标签（例如 `v1.3.3`）后自动创建 GitHub Release，并发布六个下载包：Windows x64 的安装程序和 ZIP、macOS Intel 的 DMG 和 ZIP、macOS Apple Silicon 的 DMG 和 ZIP，同时上传 `latest.json`。GitHub 会自动提供对应提交的 Source code ZIP 和 tar.gz。
 
 发版前请把以下三个版本号同步为同一个 `X.Y.Z`：
 

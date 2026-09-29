@@ -61,12 +61,11 @@ Z8 Codex requires the official Codex desktop app to be installed locally before 
 
 ### Install Z8 Codex
 
-Internal test packages are provided for each supported platform and architecture:
+Release packages are provided for each supported platform and architecture:
 
-- Windows x64: `Z8Codex-*-windows-x64-setup.exe`
-- Windows ARM64: `Z8Codex-*-windows-arm64-setup.exe`
-- macOS Intel: `Z8Codex-*-macos-x64.dmg`
-- macOS Apple Silicon: `Z8Codex-*-macos-arm64.dmg`
+- Windows x64: installer `Z8Codex-*-windows-x64-setup.exe` and ZIP
+- macOS Intel: DMG and ZIP (`Z8Codex-*-macos-x64.*`)
+- macOS Apple Silicon: DMG and ZIP (`Z8Codex-*-macos-arm64.*`)
 
 After installation, open “Z8 Codex Manager” and:
 
@@ -126,7 +125,7 @@ For Apple Silicon, use `aarch64-apple-darwin` and the `arm64` argument. Internal
 
 ### Automated releases
 
-GitHub Actions creates a GitHub Release when a strict version tag such as `v1.3.3` is pushed. It builds four installers: Windows x64, Windows ARM64, macOS Intel, and macOS Apple Silicon. It also uploads the source archive, license, third-party notices, SHA-256 checksums, and `latest.json`.
+GitHub Actions creates a GitHub Release when a strict version tag such as `v1.3.3` is pushed. It publishes six download packages: a Windows x64 installer and ZIP, macOS Intel DMG and ZIP, and macOS Apple Silicon DMG and ZIP, together with `latest.json`. GitHub also provides the Source code ZIP and tar.gz for the tagged commit automatically.
 
 Before releasing, keep these three version values equal to the same `X.Y.Z`:
 
