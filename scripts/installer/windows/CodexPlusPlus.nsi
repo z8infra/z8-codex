@@ -30,6 +30,7 @@ SetCompressor /SOLID lzma
 AllowSkipFiles off
 
 Var Z8_UPDATE_MODE
+Var Z8_INSTALL_RETRY_COUNT
 
 !define MUI_ICON "${ROOT}\apps\codex-plus-manager\src-tauri\icons\icon.ico"
 !define MUI_UNICON "${ROOT}\apps\codex-plus-manager\src-tauri\icons\icon.ico"
@@ -96,6 +97,9 @@ Section "Install"
     Call z8_update_close_processes
   ${EndIf}
 
+  StrCpy $Z8_INSTALL_RETRY_COUNT "0"
+z8_install_preflight:
+
   ; Probe only the files at the selected Z8 install path. Append mode requests
   ; write access without truncating the file; a write lock is detected here.
   ; This is a preflight, not a guarantee: each File result is checked below.
@@ -124,9 +128,22 @@ z8_install_check_legacy_manager:
   FileClose $0
   Goto z8_install_ready
 z8_install_locked:
-  MessageBox MB_OK|MB_ICONEXCLAMATION "请先关闭正在运行的 Z8 Codex，再重新安装。"
+  ; A process can take a moment to release its executable after it receives a
+  ; close request. Retry the preflight instead of aborting with a stale lock.
+  IntOp $Z8_INSTALL_RETRY_COUNT $+ 1
+  ${If} $Z8_INSTALL_RETRY_COUNT <= 60
+    Sleep 500
+    Goto z8_install_preflight
+  ${EndIf}
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Z8 Codex 文件仍在使用。请退出托盘中的 Z8 Codex，然后点击重试。" IDRETRY z8_install_retry
   SetErrorLevel 2
   Abort "Z8 Codex 可执行文件正在使用或无法写入"
+z8_install_retry:
+  StrCpy $Z8_INSTALL_RETRY_COUNT "0"
+  ${If} $Z8_UPDATE_MODE == "1"
+    Call z8_update_close_processes
+  ${EndIf}
+  Goto z8_install_preflight
 z8_install_ready:
 
   ClearErrors
