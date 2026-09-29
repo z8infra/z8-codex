@@ -176,9 +176,6 @@ function WidgetFrame({ state, errorCode, onCancel, onRetry, children }: { state:
   return <div className={`account-captcha ${state}`} aria-live="polite">
     <div className="account-captcha-widget-row">
       <div className="account-captcha-widget">{children}</div>
-    </div>
-    <div className="account-captcha-status-row">
-      <p className="field-hint" role={state === "failed" ? "alert" : "status"}>{statusText(state, errorCode)}</p>
       {state === "failed" || state === "cancelled" ? <button
         type="button"
         className="account-captcha-retry"
@@ -188,6 +185,9 @@ function WidgetFrame({ state, errorCode, onCancel, onRetry, children }: { state:
       >
         <RefreshCw aria-hidden="true" />
       </button> : null}
+    </div>
+    <div className="account-captcha-status-row">
+      <p className="field-hint" role={state === "failed" ? "alert" : "status"}>{statusText(state, errorCode)}</p>
     </div>
     {state === "ready" || state === "loading" ? <button type="button" className="account-captcha-button" onClick={onCancel}>取消验证</button> : null}
   </div>;
