@@ -228,12 +228,17 @@ fn windows_update_mode_closes_z8_processes_before_install_preflight() {
         .1;
 
     assert!(init.contains("Var Z8_UPDATE_MODE"));
+    assert!(init.contains("Var Z8_INSTALL_RETRY_COUNT"));
     assert!(init.contains("${GetOptions} \"$R0\" \"/Z8Update\" $R1"));
     assert!(helper.contains("taskkill.exe"));
     assert!(helper.contains("/IM z8-codex-manager.exe"));
     assert!(helper.contains("/IM z8-codex.exe"));
     assert!(install.contains("${If} $Z8_UPDATE_MODE == \"1\""));
     assert!(install.contains("Call z8_update_close_processes"));
+    assert!(install.contains("z8_install_preflight:"));
+    assert!(install.contains("IntOp $Z8_INSTALL_RETRY_COUNT $+ 1"));
+    assert!(install.contains("MB_RETRYCANCEL"));
+    assert!(install.contains("z8_install_retry:"));
     assert!(install.find("Call z8_update_close_processes").unwrap()
         < install.find("FileOpen $0 \"$INSTDIR\\z8-codex.exe\" a").unwrap());
     assert!(!uninstall.contains("z8_update_close_processes"));
