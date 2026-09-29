@@ -4853,7 +4853,7 @@ function AboutScreen({
                 <>
                   <span className="version-update-arrow" aria-hidden="true">-&gt;</span>
                   <strong className="version-update-latest">{update?.latestVersion}</strong>
-                  <span className="version-update-news">News</span>
+                  <span className="version-update-news">New</span>
                 </>
               ) : null}
             </div>
