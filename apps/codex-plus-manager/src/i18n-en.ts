@@ -1236,6 +1236,9 @@ export const EN_TEMPLATE: Record<string, string> = {
   "删除选中的 {0} 个会话？此操作会删除本地数据库记录和 rollout 文件，并为每个会话创建备份。\n\n{1}{2}":
     "Delete the {0} selected session(s)? This deletes the local database records and rollout files, and creates a backup for each session.\n\n{1}{2}",
   "发现 {0} 个 Codex 供应商": "Found {0} Codex provider(s)",
+  "版本更新": "Version updates",
+  "当前版本": "Current version",
+  "尚未检查更新": "Not checked yet",
   "发现新版本 {0}": "New version {0} available",
   "发现新版本": "New version available",
   "当前版本 {0}，新版本 {1} 已发布。": "Current version {0}; version {1} is available.",
