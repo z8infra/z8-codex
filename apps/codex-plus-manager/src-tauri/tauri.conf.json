@@ -33,9 +33,6 @@
   "bundle": {
     "active": false,
     "targets": "all",
-    "resources": {
-      "../../../target/release/codex-plus-plus.exe": "z8-codex.exe"
-    },
     "windows": {
       "nsis": {
         "languages": [
