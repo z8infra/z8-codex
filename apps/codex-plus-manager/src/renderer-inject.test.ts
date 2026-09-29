@@ -240,6 +240,8 @@ describe("renderer injection header compatibility", () => {
     assert.match(renderer, /button\.setAttribute\("aria-label", "Z8 Codex"\)/);
     assert.match(renderer, /z8-codex-brand-icon/);
     assert.match(renderer, /<span class="truncate">Z8 Codex<\/span>/);
+    assert.match(renderer, /data-codex-plus-version="true">Z8 Codex \$\{codexPlusVersion\}/);
+    assert.doesNotMatch(renderer, /data-codex-plus-version="true">Codex\+\+/);
     assert.doesNotMatch(renderer, /button\.setAttribute\("aria-label", "Codex\+\+"\)/);
     assert.match(renderer, /function installCodexPlusSidebarNavigation\(\)/);
     assert.match(renderer, /aside\.app-shell-left-panel nav\[role="navigation"\]/);
