@@ -4799,6 +4799,15 @@ function AboutScreen({
   diagnostics: DiagnosticsResult | null;
   actions: Actions;
 }) {
+  const currentVersion = overview?.current_version ?? update?.currentVersion ?? "-";
+  const hasNewVersion = Boolean(update?.updateAvailable && update.latestVersion);
+  const versionMessage = !update
+    ? t("尚未检查更新")
+    : update.status === "failed"
+      ? update.message
+      : hasNewVersion
+        ? tf("发现新版本 {0}", [update.latestVersion ?? "-"])
+        : t("当前已是最新版本。");
   return (
     <>
       <Panel>
@@ -4834,29 +4843,31 @@ function AboutScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title={t("GitHub Release 更新")} detail={tf("当前版本 {0}", [overview?.current_version ?? update?.currentVersion ?? "-"])} />
+        <CardHead title={t("版本更新")} detail={tf("当前版本 {0}", [currentVersion])} />
         <CardContent>
-          <div className="metric-list">
-            <Metric label={t("状态")} value={update?.status ?? "not_checked"} />
-            <Metric label={t("最新版本")} value={update?.latestVersion ?? t("未检查")} />
-            <Metric label={t("资源")} value={update?.assetName ?? "-"} />
-            <Metric label={t("进度")} value={`${formatProgressPercent(update?.progress ?? 0)}%`} />
+          <div className={`version-update-summary${hasNewVersion ? " has-new-version" : ""}`}>
+            <div className="version-update-current">
+              <span>{t("当前版本")}</span>
+              <strong>{currentVersion}</strong>
+              {hasNewVersion ? (
+                <>
+                  <span className="version-update-arrow" aria-hidden="true">-&gt;</span>
+                  <strong className="version-update-latest">{update?.latestVersion}</strong>
+                  <span className="version-update-news">News</span>
+                </>
+              ) : null}
+            </div>
+            <span className="version-update-message">{versionMessage}</span>
           </div>
-          <Textarea
-            className="log-view"
-            readOnly
-            value={update?.releaseSummary || update?.message || t("尚未检查 GitHub Release；更新会下载并启动安装包。")}
-          />
-          <TaskProgressBox completedTitle={t("上次更新结果")} progress={updateInstallProgress} title={t("安装包更新进度")} />
-          <Toolbar>
+          <Toolbar className="version-update-actions">
             <Button onClick={() => void actions.checkUpdate()}>
               <RefreshCw className="h-4 w-4" />
               {t("检查更新")}
             </Button>
-            <Button disabled={updateInstallProgress.active || !update?.assetUrl} variant="secondary" onClick={() => void actions.performUpdate()}>
+            {hasNewVersion ? <Button disabled={updateInstallProgress.active || !update?.assetUrl} variant="secondary" onClick={() => void actions.performUpdate()}>
               <Download className="h-4 w-4" />
               {updateInstallProgress.active ? t("正在下载安装包…") : t("下载并运行安装包")}
-            </Button>
+            </Button> : null}
           </Toolbar>
         </CardContent>
       </Panel>
