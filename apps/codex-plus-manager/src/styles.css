@@ -3430,6 +3430,62 @@ body {
   margin-top: 10px;
 }
 
+.version-update-summary {
+  display: grid;
+  gap: 7px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--surface-raised) / 0.55);
+  padding: 12px 14px;
+}
+
+.version-update-summary.has-new-version {
+  border-color: hsl(var(--brand-accent) / 0.65);
+  background: hsl(var(--brand-accent) / 0.1);
+}
+
+.version-update-current {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.version-update-current > span:first-child,
+.version-update-message {
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
+.version-update-current strong {
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+.version-update-arrow {
+  color: hsl(var(--muted-foreground));
+  font-size: 14px;
+}
+
+.version-update-current .version-update-latest {
+  color: hsl(var(--brand-accent));
+}
+
+.version-update-news {
+  border-radius: 999px;
+  background: hsl(var(--brand-accent));
+  color: hsl(var(--foreground));
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.version-update-actions {
+  justify-content: flex-start;
+  margin-top: 12px;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

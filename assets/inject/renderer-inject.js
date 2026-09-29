@@ -3172,7 +3172,7 @@
     if (codexPlusBackendStatus.version) {
       codexPlusVersion = codexPlusBackendStatus.version;
       document.querySelectorAll("[data-codex-plus-version]").forEach((node) => {
-        node.textContent = `Codex++ ${codexPlusVersion}`;
+        node.textContent = `Z8 Codex ${codexPlusVersion}`;
       });
     }
     const label = document.querySelector("[data-codex-backend-status]");
@@ -3392,12 +3392,12 @@
     overlay.dataset.codexPlusPage = String(pageMode);
     applyCodexPlusTheme(overlay);
     overlay.innerHTML = `
-      <div class="codex-plus-modal-content" role="dialog" aria-modal="true" aria-label="Codex++">
+      <div class="codex-plus-modal-content" role="dialog" aria-modal="true" aria-label="Z8 Codex">
         <div class="codex-plus-modal-header">
-          <div class="codex-plus-modal-title"><span class="codex-plus-backend-indicator" data-codex-backend-indicator="true" data-status="checking"></span><span data-codex-plus-version="true">Codex++ ${codexPlusVersion}</span></div>
+          <div class="codex-plus-modal-title"><span class="codex-plus-backend-indicator" data-codex-backend-indicator="true" data-status="checking"></span><span data-codex-plus-version="true">Z8 Codex ${codexPlusVersion}</span></div>
           <button type="button" class="codex-plus-modal-close" aria-label="${pageMode ? "返回" : "关闭"}">${pageMode ? "返回" : "×"}</button>
         </div>
-        <div class="codex-plus-tabs" role="tablist" aria-label="Codex++">
+        <div class="codex-plus-tabs" role="tablist" aria-label="Z8 Codex">
           <button type="button" class="codex-plus-tab-button" data-codex-plus-tab="home" data-active="true">主页</button>
           <button type="button" class="codex-plus-tab-button" data-codex-plus-tab="userScripts" data-active="false">用户脚本</button>
         </div>
