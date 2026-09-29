@@ -80,11 +80,29 @@ jobs:
           echo "Validated release version $tag_version across Cargo, Manager, and Tauri."
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      - name: Generate Chinese release notes
+        id: notes
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          REPO: ${{ github.repository }}
+          NOTES_FILE: ${{ runner.temp }}/z8-codex-release-notes.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release/generate-release-notes.mjs \
+            --tag "$TAG" \
+            --repo "$REPO" \
+            --output "$NOTES_FILE"
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+          echo "--- release notes ---"
+          cat "$NOTES_FILE"
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
           REPO: ${{ github.repository }}
+          NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
           IS_BRANCH_PUSH: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
         shell: bash
         run: |
@@ -105,7 +123,7 @@ jobs:
               --target "$target" \
               --title "Z8 Codex $TAG" \
               --draft \
-              --generate-notes
+              --notes-file "$NOTES_FILE"
           fi
 
   windows-installer:
