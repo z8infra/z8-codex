@@ -3,7 +3,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use codex_plus_core::install::SILENT_BINARY;
 use codex_plus_core::models::{DeleteResult, SessionRef};
@@ -3324,7 +3324,15 @@ pub async fn check_update() -> CommandResult<Value> {
 
 #[tauri::command]
 pub async fn perform_update(
+    app: tauri::AppHandle,
     release: Option<codex_plus_core::update::Release>,
+) -> CommandResult<Value> {
+    perform_update_inner(release, Some(app)).await
+}
+
+async fn perform_update_inner(
+    release: Option<codex_plus_core::update::Release>,
+    app: Option<tauri::AppHandle>,
 ) -> CommandResult<Value> {
     let Some(release) = release else {
         return failed(
@@ -3337,17 +3345,26 @@ pub async fn perform_update(
     };
     let download_dir = codex_plus_core::paths::default_app_state_dir().join("updates");
     match codex_plus_core::update::perform_update(&release, &download_dir).await {
-        Ok(result) => ok(
-            "安装包已下载并启动，请按安装向导完成更新。",
-            json!({
-                "currentVersion": codex_plus_core::version::VERSION,
-                "latestVersion": result.release.version,
-                "releaseSummary": result.release.body,
-                "installedPath": result.installer_path.to_string_lossy(),
-                "launched": result.launched,
-                "progress": 100
-            }),
-        ),
+        Ok(result) => {
+            // The installer replaces the manager executable as well as the
+            // launcher. Exit this process after the command response has had
+            // time to reach the renderer so the installer never races a live
+            // manager process.
+            if let Some(app) = app {
+                schedule_update_exit(app);
+            }
+            ok(
+                "安装包已下载并启动，请按安装向导完成更新。",
+                json!({
+                    "currentVersion": codex_plus_core::version::VERSION,
+                    "latestVersion": result.release.version,
+                    "releaseSummary": result.release.body,
+                    "installedPath": result.installer_path.to_string_lossy(),
+                    "launched": result.launched,
+                    "progress": 100
+                }),
+            )
+        }
         Err(error) => failed(
             &format!("安装更新失败：{error}"),
             json!({
@@ -3358,6 +3375,13 @@ pub async fn perform_update(
             }),
         ),
     }
+}
+
+fn schedule_update_exit(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(800));
+        app.exit(0);
+    });
 }
 
 #[tauri::command]
@@ -6150,7 +6174,7 @@ base_url = "https://example.invalid/v1"
 
     #[test]
     fn update_install_requires_release_payload() {
-        let result = tauri::async_runtime::block_on(perform_update(None));
+        let result = tauri::async_runtime::block_on(perform_update_inner(None, None));
 
         assert_eq!(result.status, "failed");
         assert!(result.message.contains("请先检查更新"));

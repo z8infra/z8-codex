@@ -213,6 +213,33 @@ fn windows_installer_fails_closed_when_z8_executables_cannot_be_replaced_or_remo
 }
 
 #[test]
+fn windows_update_mode_closes_z8_processes_before_install_preflight() {
+    let nsi = read_repo("scripts/installer/windows/CodexPlusPlus.nsi").replace("\r\n", "\n");
+    let (init, after_init) = nsi
+        .split_once("Function z8_update_close_processes")
+        .expect("update process helper");
+    let (helper, sections) = after_init
+        .split_once("Section \"Install\"")
+        .expect("install section");
+    let (install, sections) = sections.split_once("SectionEnd").expect("install end");
+    let uninstall = sections
+        .split_once("Section \"Uninstall\"")
+        .expect("uninstall section")
+        .1;
+
+    assert!(init.contains("Var Z8_UPDATE_MODE"));
+    assert!(init.contains("${GetOptions} \"$R0\" \"/Z8Update\" $R1"));
+    assert!(helper.contains("taskkill.exe"));
+    assert!(helper.contains("/IM z8-codex-manager.exe"));
+    assert!(helper.contains("/IM z8-codex.exe"));
+    assert!(install.contains("${If} $Z8_UPDATE_MODE == \"1\""));
+    assert!(install.contains("Call z8_update_close_processes"));
+    assert!(install.find("Call z8_update_close_processes").unwrap()
+        < install.find("FileOpen $0 \"$INSTDIR\\z8-codex.exe\" a").unwrap());
+    assert!(!uninstall.contains("z8_update_close_processes"));
+}
+
+#[test]
 fn windows_release_and_pr_build_package_native_x64_and_arm64_wrappers() {
     let release = read_repo(".github/workflows/release-assets.yml");
     for required in [
