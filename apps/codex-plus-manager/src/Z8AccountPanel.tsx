@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -761,7 +761,6 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
             <CardTitle id={authTitleId}>{accountLoading ? "正在读取 Z8 账户" : pendingTwoFactor ? "验证 Z8 账户" : registerMode ? "创建 Z8 账户" : "登录 Z8 账户"}</CardTitle>
           </div>
           <div className="z8-auth-header-actions">
-            <CardDescription>{accountLoading ? "正在检查本地会话…" : "登录后获取账户 API Key 并配置 Z8 Provider"}</CardDescription>
             {onClose ? <Button type="button" variant="outline" size="icon" className="z8-auth-close" onClick={onClose} aria-label="关闭账户登录"><X aria-hidden="true" /></Button> : null}
           </div>
         </CardHeader> : null}

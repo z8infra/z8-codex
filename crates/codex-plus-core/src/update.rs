@@ -304,7 +304,7 @@ pub async fn perform_update(
 
 fn update_http_client() -> anyhow::Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
-        .user_agent(format!("Codex++/{}", crate::version::VERSION))
+        .user_agent(format!("Z8 Codex/{}", crate::version::VERSION))
         .connect_timeout(UPDATE_CONNECT_TIMEOUT)
         .timeout(UPDATE_DOWNLOAD_TIMEOUT)
         .build()?)
@@ -358,7 +358,10 @@ fn platform_asset_rank(name: &str) -> u8 {
         return 1;
     }
     if cfg!(windows) && is_windows_installer_asset(name) {
-        return 0;
+        if is_windows_native_arch_asset(name) {
+            return 0;
+        }
+        return 1;
     }
     2
 }
@@ -392,19 +395,44 @@ fn is_macos_native_arch_asset(name: &str) -> bool {
 }
 
 fn is_windows_installer_asset(name: &str) -> bool {
-    name.contains("codex")
-        && name.contains("plus")
-        && (name.ends_with(".msi")
-            || name.ends_with("-setup.exe")
-            || name.ends_with("_setup.exe")
-            || name.ends_with("setup.exe")
-            || name.ends_with("installer.exe"))
+    let lower = name.to_ascii_lowercase();
+    (lower.contains("z8codex") || (lower.contains("codex") && lower.contains("plus")))
+        && (lower.ends_with(".msi")
+            || lower.ends_with("-setup.exe")
+            || lower.ends_with("_setup.exe")
+            || lower.ends_with("setup.exe")
+            || lower.ends_with("installer.exe"))
+}
+
+fn is_windows_native_arch_asset(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let native_arch_token = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        _ => return true,
+    };
+    let other_arch_token = if native_arch_token == "x64" { "arm64" } else { "x64" };
+    let has_arch = |arch: &str| {
+        lower.contains(&format!("-windows-{arch}-"))
+            || lower.contains(&format!("-{arch}-setup.exe"))
+            || lower.contains(&format!("_{arch}-setup.exe"))
+            || lower.contains(&format!("_{arch}.msi"))
+    };
+    if has_arch(native_arch_token) {
+        return true;
+    }
+    if has_arch(other_arch_token) {
+        return false;
+    }
+    true
 }
 
 fn is_macos_installer_asset(name: &str) -> bool {
     // Loose shape check; arch preference is handled by platform_asset_rank
     // via is_macos_native_arch_asset.
-    name.contains("codex") && name.contains("plus") && name.ends_with(".dmg")
+    let lower = name.to_ascii_lowercase();
+    (lower.contains("z8codex") || (lower.contains("codex") && lower.contains("plus")))
+        && lower.ends_with(".dmg")
 }
 
 pub fn launch_installer(path: &Path) -> anyhow::Result<()> {

@@ -19,8 +19,8 @@ test("Z8 brand config exposes a stable product identity", () => {
   assert.equal(Z8_BRAND.mark, "Z8");
 });
 
-test("upstream-only navigation stays disabled for the Z8 release", () => {
-  assert.equal(Z8_FEATURES.onlineUpdates, false);
+test("Z8 feature gates keep online updates enabled and upstream-only routes disabled", () => {
+  assert.equal(Z8_FEATURES.onlineUpdates, true);
   assert.equal(Z8_FEATURES.zedRemote, false);
 });
 

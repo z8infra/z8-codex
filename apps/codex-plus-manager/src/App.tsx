@@ -24,6 +24,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Camera,
+  CircleArrowUp,
   Copy,
   Download,
   Edit3,
@@ -761,6 +762,17 @@ type InstallResult = CommandResult<{
   management_shortcut: { installed: boolean; path: string | null };
 }>;
 
+type UpdateResult = CommandResult<{
+  currentVersion: string;
+  latestVersion?: string | null;
+  releaseSummary?: string;
+  assetName?: string | null;
+  assetUrl?: string | null;
+  updateAvailable?: boolean;
+  installedPath?: string;
+  progress?: number;
+}>;
+
 function providerSyncProgressMessage(result: CommandResult<ProviderSyncPayload>): string {
   const changed = result.changedSessionFiles ?? 0;
   const rows = result.sqliteRowsUpdated ?? 0;
@@ -1013,6 +1025,14 @@ export function App() {
   const [logs, setLogs] = useState<LogsResult | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsResult | null>(null);
   const [watcher, setWatcher] = useState<WatcherResult | null>(null);
+  const [update, setUpdate] = useState<UpdateResult | null>(null);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [updateInstallProgress, setUpdateInstallProgress] = useState<TaskProgress>({
+    active: false,
+    percent: 0,
+    message: t("尚未运行安装包更新。"),
+  });
+  const updateCheckInFlightRef = useRef(false);
   const [launchForm, setLaunchForm] = useState({
     appPath: "",
     debugPort: "9229",
@@ -1727,6 +1747,96 @@ export function App() {
     }
   };
 
+  const checkUpdate = async (silent = false, openDialog = true): Promise<UpdateResult | null> => {
+    if (updateCheckInFlightRef.current) return null;
+    updateCheckInFlightRef.current = true;
+    try {
+      const result = await run(() => call<UpdateResult>("check_update"));
+      if (!result) return null;
+      setUpdate(result);
+      const version = result.latestVersion ?? "";
+      const skipped = version && window.localStorage.getItem(`z8-codex.update.skip.${version}`) === "1";
+      if (result.updateAvailable && openDialog && !(silent && skipped)) {
+        setUpdateDialogOpen(true);
+      } else if (!silent || (result.updateAvailable && !(silent && skipped))) {
+        showNotice(t("GitHub Release 检查"), result.message, result.status);
+      }
+      return result;
+    } finally {
+      updateCheckInFlightRef.current = false;
+    }
+  };
+
+  const checkUpdateOnFirstLaunch = async () => {
+    const now = new Date();
+    const today = [now.getFullYear(), now.getMonth() + 1, now.getDate()]
+      .map((value, index) => (index === 0 ? String(value) : String(value).padStart(2, "0")))
+      .join("-");
+    const storageKey = "z8-codex.update.last-check-date";
+    if (window.localStorage.getItem(storageKey) === today) return;
+    const result = await checkUpdate(true, true);
+    if (result && result.status !== "failed") window.localStorage.setItem(storageKey, today);
+  };
+
+  const skipUpdateVersion = () => {
+    const version = update?.latestVersion;
+    if (version) window.localStorage.setItem(`z8-codex.update.skip.${version}`, "1");
+    setUpdateDialogOpen(false);
+  };
+
+  const performUpdate = async () => {
+    if (updateInstallProgress.active) return;
+    const release =
+      update?.latestVersion && update.assetName && update.assetUrl
+        ? {
+            version: update.latestVersion,
+            url: "",
+            body: update.releaseSummary ?? "",
+            asset_name: update.assetName,
+            asset_url: update.assetUrl,
+          }
+        : null;
+    setUpdateInstallProgress({ active: true, percent: 8, message: t("正在准备安装包下载…") });
+    const startedAt = Date.now();
+    const progressTimer = window.setInterval(() => {
+      setUpdateInstallProgress((current) => {
+        if (!current.active) return current;
+        const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+        const nextPercent =
+          elapsedSeconds < 3
+            ? Math.min(24, current.percent + 4)
+            : elapsedSeconds < 15
+              ? Math.min(68, current.percent + 3)
+              : elapsedSeconds < 45
+                ? Math.min(86, current.percent + 1)
+                : Math.min(99, current.percent + 0.2);
+        const message =
+          elapsedSeconds < 3
+            ? t("正在获取 GitHub Release 信息…")
+            : elapsedSeconds < 15
+              ? t("正在下载安装包…")
+              : elapsedSeconds < 45
+                ? t("正在写入安装包…")
+                : t("下载或启动耗时较长，请保持窗口打开；完成或失败后会自动更新状态。");
+        return { ...current, percent: nextPercent, message };
+      });
+    }, 500);
+    try {
+      const result = await run(() => call<UpdateResult>("perform_update", { release }));
+      if (result) {
+        setUpdate(result);
+        const succeeded = isSuccessStatus(result.status);
+        setUpdateInstallProgress({ active: false, percent: result.progress ?? (succeeded ? 100 : 0), message: result.message });
+        if (succeeded) setUpdateDialogOpen(false);
+        showNotice(t("更新安装"), result.message, result.status);
+      } else {
+        setUpdateInstallProgress({ active: false, percent: 0, message: t("安装包更新失败，请查看错误提示后重试。") });
+      }
+    } finally {
+      window.clearInterval(progressTimer);
+    }
+  };
+
   const watcherAction = async (command: string) => {
     const result = await run(() => call<WatcherResult>(command));
     if (result) {
@@ -2437,6 +2547,7 @@ export function App() {
       await refreshPendingProviderImport(true);
       await refreshPendingSessionShare(true);
       await refreshRemotePluginMarketplace(true);
+      if (Z8_FEATURES.onlineUpdates) void checkUpdateOnFirstLaunch();
     })();
   }, []);
 
@@ -2559,6 +2670,8 @@ export function App() {
       installEntrypoints,
       uninstallEntrypoints,
       repairShortcuts,
+      checkUpdate: async () => { await checkUpdate(false, true); },
+      performUpdate,
       saveSettings,
       saveSettingsValue,
       refreshSettings,
@@ -2702,8 +2815,10 @@ export function App() {
       disableWatcher: () => watcherAction("disable_watcher"),
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
     }),
-    [route, launchForm, settingsForm, settings, overview, removeOwnedData, logs, diagnostics, theme, relayFiles, localSessions, sessionShareUrl, importSessionUrl, zedRemoteProjects, selectedProviderSyncTarget, envConflicts, relayEnvironment, ccsProviders],
+    [route, launchForm, settingsForm, settings, overview, removeOwnedData, update, updateInstallProgress.active, logs, diagnostics, theme, relayFiles, localSessions, sessionShareUrl, importSessionUrl, zedRemoteProjects, selectedProviderSyncTarget, envConflicts, relayEnvironment, ccsProviders],
   );
+
+  const hasUpdate = update?.updateAvailable === true;
 
   return (
     <div className={`shell ${theme}`}>
@@ -2715,6 +2830,16 @@ export function App() {
           <div className="brand-copy">
             <div className="brand-title-row">
               <div className="brand-title">{Z8_BRAND.productName}</div>
+              {Z8_FEATURES.onlineUpdates && hasUpdate ? (
+                <button
+                  className="update-dot"
+                  onClick={() => setUpdateDialogOpen(true)}
+                  title={tf("发现新版本 {0}", [update?.latestVersion ?? ""])}
+                  type="button"
+                >
+                  <CircleArrowUp className="h-4 w-4" aria-hidden="true" />
+                </button>
+              ) : null}
             </div>
             <div className="brand-subtitle">
               {getLanguage() === "en" ? Z8_BRAND.subtitleEn : Z8_BRAND.subtitle}
@@ -2893,6 +3018,8 @@ export function App() {
           {route === "about" ? (
             <AboutScreen
               overview={overview}
+              update={update}
+              updateInstallProgress={updateInstallProgress}
               logs={logs}
               diagnostics={diagnostics}
               actions={actions}
@@ -2924,6 +3051,15 @@ export function App() {
           changeRoute("account");
         }}
       />
+      {updateDialogOpen && update?.updateAvailable ? (
+        <UpdateDialog
+          update={update}
+          progress={updateInstallProgress}
+          onClose={() => setUpdateDialogOpen(false)}
+          onSkip={skipUpdateVersion}
+          onUpdate={() => void performUpdate()}
+        />
+      ) : null}
       {notice ? (
         <NoticeDialog
           key={`${notice.title}-${notice.message}-${notice.status ?? ""}`}
@@ -2978,6 +3114,8 @@ type Actions = {
   installEntrypoints: () => Promise<void>;
   uninstallEntrypoints: () => Promise<void>;
   repairShortcuts: () => Promise<void>;
+  checkUpdate: () => Promise<void>;
+  performUpdate: () => Promise<void>;
   saveSettings: () => Promise<void>;
   saveSettingsValue: (settings: BackendSettings, silent?: boolean) => Promise<BackendSettings | null>;
   refreshSettings: (silent?: boolean) => Promise<BackendSettings | null>;
@@ -4648,11 +4786,15 @@ function MaintenanceScreen({
 
 function AboutScreen({
   overview,
+  update,
+  updateInstallProgress,
   logs,
   diagnostics,
   actions,
 }: {
   overview: OverviewResult | null;
+  update: UpdateResult | null;
+  updateInstallProgress: TaskProgress;
   logs: LogsResult | null;
   diagnostics: DiagnosticsResult | null;
   actions: Actions;
@@ -4692,12 +4834,30 @@ function AboutScreen({
         </CardContent>
       </Panel>
       <Panel>
-        <CardHead title={t("Z8 Codex 版本维护")} detail={t("更新由 Z8 发布渠道统一提供")} />
+        <CardHead title={t("GitHub Release 更新")} detail={tf("当前版本 {0}", [overview?.current_version ?? update?.currentVersion ?? "-"])} />
         <CardContent>
-          <p className="hint-line">
-            <Info className="h-4 w-4" />
-            <span>{t("当前版本不会在应用内检查或安装更新；请使用 Z8 发布渠道获取新版本。")}</span>
-          </p>
+          <div className="metric-list">
+            <Metric label={t("状态")} value={update?.status ?? "not_checked"} />
+            <Metric label={t("最新版本")} value={update?.latestVersion ?? t("未检查")} />
+            <Metric label={t("资源")} value={update?.assetName ?? "-"} />
+            <Metric label={t("进度")} value={`${formatProgressPercent(update?.progress ?? 0)}%`} />
+          </div>
+          <Textarea
+            className="log-view"
+            readOnly
+            value={update?.releaseSummary || update?.message || t("尚未检查 GitHub Release；更新会下载并启动安装包。")}
+          />
+          <TaskProgressBox completedTitle={t("上次更新结果")} progress={updateInstallProgress} title={t("安装包更新进度")} />
+          <Toolbar>
+            <Button onClick={() => void actions.checkUpdate()}>
+              <RefreshCw className="h-4 w-4" />
+              {t("检查更新")}
+            </Button>
+            <Button disabled={updateInstallProgress.active || !update?.assetUrl} variant="secondary" onClick={() => void actions.performUpdate()}>
+              <Download className="h-4 w-4" />
+              {updateInstallProgress.active ? t("正在下载安装包…") : t("下载并运行安装包")}
+            </Button>
+          </Toolbar>
         </CardContent>
       </Panel>
       <LogsPanel logs={logs} actions={actions} />
@@ -7530,6 +7690,55 @@ function PendingProviderImportDialog({
             {t("确认导入")}
           </Button>
           <Button onClick={onDismiss} variant="secondary">{t("取消")}</Button>
+        </Toolbar>
+      </div>
+    </div>
+  );
+}
+
+function UpdateDialog({
+  update,
+  progress,
+  onClose,
+  onSkip,
+  onUpdate,
+}: {
+  update: UpdateResult;
+  progress: TaskProgress;
+  onClose: () => void;
+  onSkip: () => void;
+  onUpdate: () => void;
+}) {
+  const notes = (update.releaseSummary || t("此版本没有附加更新说明。"))
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
+    .filter(Boolean);
+  const installing = progress.active;
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="z8-update-title">
+      <div className="modal-card update-modal">
+        <div className="modal-head">
+          <div>
+            <h2 id="z8-update-title"><CircleArrowUp className="h-5 w-5" />{t("发现新版本")}</h2>
+            <p>{tf("当前版本 {0}，新版本 {1} 已发布。", [update.currentVersion, update.latestVersion ?? "-"])}</p>
+          </div>
+          <button className="toast-close" disabled={installing} onClick={onClose} type="button">×</button>
+        </div>
+        <div className="update-release-notes">
+          <strong>{t("更新内容")}</strong>
+          <ul>
+            {notes.map((note, index) => <li key={`${index}-${note}`}>{note}</li>)}
+          </ul>
+        </div>
+        {progress.active ? <TaskProgressBox progress={progress} title={t("安装包更新进度")} /> : null}
+        {!update.assetUrl ? <p className="field-hint">{t("当前平台没有匹配的安装包，请前往 Release 页面查看。")}</p> : null}
+        <Toolbar className="update-modal-actions">
+          <Button disabled={installing} onClick={onClose} variant="secondary">{t("取消")}</Button>
+          <Button disabled={installing} onClick={onSkip} variant="outline">{t("跳过此版本")}</Button>
+          <Button disabled={installing || !update.assetUrl} onClick={onUpdate}>
+            <Download className="h-4 w-4" />
+            {installing ? t("正在下载安装包…") : t("立即更新")}
+          </Button>
         </Toolbar>
       </div>
     </div>

@@ -3463,6 +3463,49 @@ body {
   font-size: 18px;
 }
 
+.update-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: hidden;
+}
+
+.update-modal .modal-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-modal .modal-head h2 svg {
+  color: hsl(var(--brand-accent));
+}
+
+.update-release-notes {
+  max-height: min(360px, 42vh);
+  overflow-y: auto;
+  border-top: 1px solid hsl(var(--border));
+  border-bottom: 1px solid hsl(var(--border));
+  padding: 16px 4px 16px 0;
+}
+
+.update-release-notes strong {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.update-release-notes ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.6;
+}
+
+.update-modal-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 .modal-head p {
   margin: 0;
   color: hsl(var(--muted-foreground));
