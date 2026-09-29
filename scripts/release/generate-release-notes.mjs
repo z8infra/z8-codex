@@ -150,6 +150,9 @@ const changelogUrl = previousTag
 const changelogText = previousTag
   ? `查看 ${previousTag} 到 ${tag} 的完整变更`
   : `查看 ${tag} 的完整提交记录`;
+const version = tag.slice(1);
+const releaseBaseUrl = `https://github.com/${repo}/releases/download/${tag}`;
+const assetLink = (name) => `[\`${name}\`](${releaseBaseUrl}/${encodeURIComponent(name)})`;
 
 const lines = [
   `## Z8 Codex ${tag}`,
@@ -170,9 +173,18 @@ lines.push(
   "",
   "## 安装包",
   "",
-  "- Windows x64：安装程序（.exe）和 ZIP 压缩包",
-  "- macOS Intel：DMG 和 ZIP 压缩包",
-  "- macOS Apple Silicon：DMG 和 ZIP 压缩包",
+  "请根据电脑芯片选择对应版本。macOS 用户可在“关于本机”中查看芯片类型；DMG 适合普通安装，ZIP 适合手动解压或便携使用。",
+  "",
+  "| 平台 / 芯片 | 推荐下载 | ZIP 压缩包 |",
+  "| --- | --- | --- |",
+  `| Windows x64 | ${assetLink(`Z8Codex-${version}-windows-x64-setup.exe`)} | ${assetLink(`Z8Codex-${version}-windows-x64.zip`)} |`,
+  `| macOS Intel（x86_64） | ${assetLink(`Z8Codex-${version}-macos-x64.dmg`)} | ${assetLink(`Z8Codex-${version}-macos-x64.zip`)} |`,
+  `| macOS Apple Silicon（M1/M2/M3/M4 等） | ${assetLink(`Z8Codex-${version}-macos-arm64.dmg`)} | ${assetLink(`Z8Codex-${version}-macos-arm64.zip`)} |`,
+  "",
+  "### macOS 芯片选择",
+  "",
+  "- Intel 芯片：下载文件名中包含 `macos-x64` 的版本。",
+  "- Apple Silicon（M1/M2/M3/M4 等）：下载文件名中包含 `macos-arm64` 的版本。",
   "",
   "## 完整变更（Full Changelog）",
   "",
