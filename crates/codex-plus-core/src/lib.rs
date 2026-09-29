@@ -1,0 +1,86 @@
+pub mod app_paths;
+pub mod assets;
+pub mod bridge;
+pub mod ccs_import;
+pub mod cdp;
+pub mod codex_app_state;
+pub mod codex_desktop_mirror;
+pub mod codex_home;
+pub mod codex_local_storage;
+pub mod codex_sqlite;
+pub mod connect;
+pub mod diagnostic_log;
+pub mod env_conflicts;
+pub mod grok_config;
+pub mod http_client;
+pub mod install;
+pub mod launcher;
+pub mod manager_navigation;
+pub mod mcp_config;
+pub mod model_catalog;
+pub mod model_suffix;
+pub mod models;
+pub mod native_browser;
+pub mod native_menu;
+pub mod paths;
+pub mod plugin_marketplace;
+pub mod ports;
+pub mod protocol_proxy;
+pub mod provider_import;
+pub mod proxy;
+pub mod relay_config;
+pub mod relay_environment;
+pub mod relay_rotation;
+pub mod relay_switch;
+pub mod remote_control_recovery;
+pub mod routes;
+pub mod runtime_boundary;
+pub mod share;
+pub mod session_share;
+pub mod settings;
+pub mod skills;
+pub mod status;
+pub mod stepwise;
+pub mod sub2api;
+pub mod tools;
+pub mod update;
+pub mod upstream_worktree;
+pub mod version;
+pub mod vision;
+pub mod watcher;
+pub mod user_scripts;
+#[cfg(windows)]
+mod windows_integration;
+pub mod zed_remote;
+pub mod z8_account;
+pub mod z8_provisioning;
+pub mod z8_secure_store;
+pub mod z8_usage;
+
+#[cfg(windows)]
+pub fn windows_create_no_window() -> u32 {
+    windows_integration::CREATE_NO_WINDOW
+}
+
+#[cfg(windows)]
+pub fn windows_open_url(url: &str) -> anyhow::Result<()> {
+    windows_integration::open_url(url)
+}
+
+#[cfg(windows)]
+pub fn windows_activate_process_window(process_id: u32) -> bool {
+    windows_integration::activate_process_window(process_id)
+}
+
+#[cfg(windows)]
+pub fn windows_apply_codexplusplus_icon_to_process_window(
+    process_id: u32,
+    icon_resource_path: std::path::PathBuf,
+) -> bool {
+    windows_integration::apply_codexplusplus_icon_to_process_window(process_id, icon_resource_path)
+}
+
+#[cfg(windows)]
+pub fn windows_enumerate_processes() -> Vec<windows_integration::WindowsProcessInfo> {
+    windows_integration::enumerate_processes()
+}

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Z8 Codex QA mock</title></head>
+<body>
+  <div id="app"></div>
+  <script>
+    const scenario = new URLSearchParams(location.search).get("scenario") || "auth";
+    const key = { id: "qa-key", name: "QA Key", status: "active", secret: { masked: "sk…0000", fingerprint: "qa" }, selected: true };
+    const signedIn = { status: "ok", message: "测试账户已登录", authenticated: true, email: "qa@example.invalid", keys: [key] };
+    const signedOut = { status: "ok", message: "未登录", authenticated: false, email: null, keys: [] };
+    const calls = [];
+    window.__z8Qa = { calls, scenario };
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (command, args) => {
+        calls.push({ command, args });
+        // Keep the shell at its initial render boundary; a fake BackendSettings
+        // snapshot would exercise unrelated screens with impossible data.
+        if (scenario === "shell" && command === "startup_options") return new Promise(() => {});
+        switch (command) {
+          case "z8_account_status": return scenario === "redeem" ? signedIn : signedOut;
+          case "z8_auth_settings": return { status: "ok", message: "QA 设置", settings: {
+            registrationEnabled: true, emailVerifyEnabled: true, invitationCodeEnabled: true, promoCodeEnabled: true,
+            turnstileEnabled: false, tencentCaptchaEnabled: false, aliyunCaptchaEnabled: false,
+            loginAgreementEnabled: true, loginAgreementMode: "checkbox", loginAgreementRevision: "qa-1",
+            loginAgreementUpdatedAt: "2026-09-27", loginAgreementDocuments: [
+              { id: "terms", title: "模拟服务条款（无实际效力）", contentMd: "此页面只用于本地交互测试。" },
+              { id: "privacy", title: "模拟隐私说明（无实际效力）", contentMd: "无请求发往 Z8 服务。" },
+            ],
+          } };
+          case "z8_login": return { ...signedOut, status: "accepted", pendingTwoFactor: true, pendingEmail: args.input.email, message: "请输入二次验证码" };
+          case "z8_complete_two_factor": return signedIn;
+          case "z8_cancel_login": return signedOut;
+          case "z8_send_verification_code": return { status: "ok", message: "模拟验证码已发送", sent: true };
+          case "z8_register": return signedIn;
+          case "z8_redeem": return { status: "ok", message: "模拟兑换成功", receipt: { message: "模拟兑换成功" }, account: signedIn };
+          case "z8_refresh_session": case "z8_refresh_keys": case "z8_apply_key": return signedIn;
+          case "z8_logout": return signedOut;
+          case "z8_check_provider": return { status: "ok", message: "模拟连接通过" };
+          default: return { status: "ok", message: "QA mock" };
+        }
+      },
+      transformCallback: () => 1,
+      unregisterCallback: () => {},
+      convertFileSrc: (path) => path,
+    };
+  </script>
+  <script type="module">
+    import React from "react";
+    import { createRoot } from "react-dom/client";
+    import { Z8AccountPanel } from "./src/Z8AccountPanel.tsx";
+    import { App } from "./src/App.tsx";
+    import "./src/styles.css";
+    import "./src/z8-brand.css";
+    const view = scenario === "shell" ? React.createElement(App) : React.createElement(Z8AccountPanel);
+    createRoot(document.getElementById("app")).render(view);
+  </script>
+</body>
+</html>

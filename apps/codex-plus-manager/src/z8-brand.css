@@ -1,0 +1,1544 @@
+/* Z8 visual layer. Keep the upstream Manager layout rules in styles.css so
+   upstream changes can be rebased without merging a full stylesheet fork. */
+:root,
+:root.light,
+.shell.light {
+  --background: 60 33% 94%;
+  --foreground: 60 14% 7%;
+  --card: 0 0% 100%;
+  --card-foreground: 60 14% 7%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 60 14% 7%;
+  --primary: 82.285714 100% 65.686275%;
+  --primary-foreground: 60 14% 7%;
+  --secondary: 60 19% 90%;
+  --secondary-foreground: 60 14% 7%;
+  --muted: 60 19% 90%;
+  --muted-foreground: 60 5% 41%;
+  --accent: 82.285714 100% 65.686275%;
+  --accent-foreground: 60 14% 7%;
+  --destructive: 5 71% 40%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 60 9% 80%;
+  --input: 60 9% 80%;
+  --ring: 60 14% 7%;
+  --shell-bg: 60 33% 94%;
+  --sidebar-bg: 0 0% 100%;
+  --sidebar-muted: 60 19% 90%;
+  --sidebar-border: 60 9% 80%;
+  --surface-raised: 0 0% 100%;
+  --surface-sunken: 60 19% 90%;
+  --brand-accent: 82.285714 100% 65.686275%;
+  --brand-accent-2: 82.285714 100% 65.686275%;
+  --switch-track: 60 9% 80%;
+  --switch-thumb: 0 0% 100%;
+  --status-success: 60 14% 7%;
+  --status-warning: 60 5% 41%;
+  --status-error: 5 71% 40%;
+  --hairline: 60 14% 7%;
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-xl: none;
+  --focus-ring: 0 0 0 3px #14140f;
+  color-scheme: light;
+  font-family: "Segoe UI Variable", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  font-feature-settings: normal;
+}
+
+:root.dark,
+.shell.dark {
+  --background: 60 6% 11%;
+  --foreground: 60 33% 94%;
+  --card: 60 5% 15%;
+  --card-foreground: 60 33% 94%;
+  --popover: 60 5% 15%;
+  --popover-foreground: 60 33% 94%;
+  --primary: 82.285714 100% 65.686275%;
+  --primary-foreground: 60 14% 7%;
+  --secondary: 60 4% 23%;
+  --secondary-foreground: 60 33% 94%;
+  --muted: 60 4% 23%;
+  --muted-foreground: 60 9% 72%;
+  --accent: 60 4% 23%;
+  --accent-foreground: 60 33% 94%;
+  --border: 60 4% 33%;
+  --input: 60 4% 33%;
+  --ring: 82.285714 100% 65.686275%;
+  --shell-bg: 60 6% 11%;
+  --sidebar-bg: 60 6% 11%;
+  --sidebar-muted: 60 4% 23%;
+  --sidebar-border: 60 4% 33%;
+  --surface-raised: 60 5% 15%;
+  --surface-sunken: 60 6% 9%;
+  --brand-accent: 82.285714 100% 65.686275%;
+  --brand-accent-2: 82.285714 100% 65.686275%;
+  --status-success: 82.285714 100% 65.686275%;
+  --status-warning: 60 9% 72%;
+  --status-error: 5 71% 60%;
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-xl: none;
+  font-family: "Segoe UI Variable", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  font-feature-settings: normal;
+}
+
+.sidebar,
+.topbar {
+  backdrop-filter: none;
+}
+
+.topbar {
+  min-height: 64px;
+  padding-inline: 32px;
+  background: hsl(var(--sidebar-bg));
+}
+
+.topbar h1 {
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.brand-title {
+  background: none;
+  color: hsl(var(--foreground));
+  text-shadow: none;
+  animation: none;
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.brand-subtitle {
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.nav-item {
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.nav-item.active {
+  background: hsl(var(--brand-accent));
+  color: #14140f;
+}
+
+.nav-item.active::before {
+  display: none;
+}
+
+.nav-item.active .nav-icon,
+.nav-badge {
+  color: #14140f;
+}
+
+.screen {
+  gap: 24px;
+  padding: 24px 32px 32px;
+}
+
+.screen > * {
+  width: min(100%, 1120px);
+}
+
+.panel,
+.panel:hover,
+.feature-group,
+.relay-profile-editor,
+.relay-context-panel,
+.modal-card,
+.toast-card {
+  box-shadow: none;
+}
+
+.panel {
+  border-radius: 16px;
+}
+
+.panel-head {
+  padding: 20px 24px 16px;
+}
+
+.panel-head h3 {
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.panel-head p {
+  font-size: 13px;
+}
+
+.z8-account-page {
+  gap: 16px;
+}
+
+/* Authentication is the first-run gate, so keep it visually separate from
+   the account dashboard instead of presenting it as an unfinished page. */
+.z8-account-auth-page {
+  position: relative;
+  min-height: min(680px, calc(100vh - 48px));
+  place-items: center;
+}
+
+.z8-account-auth-page::before {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  background: hsl(226 26% 8% / 0.34);
+  content: "";
+  pointer-events: none;
+}
+
+.z8-account-auth-page > .panel {
+  position: relative;
+  z-index: 2;
+  width: min(560px, 100%);
+  margin: auto;
+  box-shadow: 0 24px 64px hsl(226 40% 3% / 0.26);
+}
+
+.z8-account-auth-page .panel-head {
+  padding: 28px 28px 18px;
+}
+
+.z8-account-auth-page .z8-account-content {
+  padding: 0 28px 28px;
+}
+
+.z8-account-page .field input,
+.z8-account-page button {
+  min-height: 40px;
+}
+
+.z8-account-page button {
+  border-radius: 9px;
+}
+
+.z8-account-page :is(button, input, select):focus-visible,
+.nav-item:focus-visible {
+  outline: 3px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.z8-key-row {
+  min-height: 58px;
+  border-radius: 8px;
+}
+
+.z8-key-row.selected {
+  border-color: hsl(var(--foreground));
+  background: hsl(var(--brand-accent) / 0.22);
+}
+
+.z8-account-notice {
+  border-radius: 8px;
+  background: hsl(var(--card));
+}
+
+.z8-agreement {
+  display: block;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.z8-agreement > p,
+.z8-agreement-dialog p {
+  margin: 0 0 12px;
+  color: hsl(var(--muted-foreground));
+}
+
+.z8-agreement-documents {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.z8-agreement-links {
+  color: hsl(var(--foreground));
+  line-height: 1.6;
+}
+
+.z8-agreement-links a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.z8-agreement-links a:focus-visible {
+  outline: 3px solid hsl(var(--brand-accent));
+  outline-offset: 3px;
+}
+
+.z8-agreement-documents details {
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.z8-agreement-documents summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.z8-agreement-documents pre {
+  margin: 12px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.z8-agreement-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 0;
+}
+
+.z8-agreement-consent-copy {
+  min-width: 0;
+  flex: 1;
+  line-height: 1.6;
+}
+
+.z8-agreement-consent-copy label {
+  cursor: pointer;
+}
+
+.z8-agreement-consent input {
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  flex: none;
+  accent-color: hsl(var(--brand-accent));
+}
+
+.z8-agreement-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  margin: auto;
+  padding: 24px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 16px;
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+}
+
+.z8-agreement-dialog::backdrop {
+  background: rgb(20 20 15 / 0.7);
+}
+
+.z8-agreement-dialog h3 {
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.z8-agreement-dialog .z8-agreement-documents {
+  max-height: min(480px, calc(100vh - 240px));
+}
+
+.z8-agreement-dialog .toolbar {
+  margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+  .topbar {
+    padding-inline: 20px;
+  }
+
+  .screen {
+    padding-inline: 20px;
+  }
+}
+
+.z8-host-install-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  overflow-y: auto;
+}
+
+.z8-host-install-eyebrow {
+  display: block;
+  margin-bottom: 8px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.z8-host-install-body {
+  display: grid;
+  gap: 16px;
+  padding: 20px 24px 8px;
+  line-height: 1.6;
+}
+
+.z8-host-install-body p {
+  margin: 0;
+}
+
+.z8-host-install-facts {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--background));
+}
+
+.z8-host-install-facts > div {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+
+.z8-host-install-facts span,
+.z8-host-install-hint {
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
+.z8-host-install-facts strong {
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.z8-host-install-manual,
+.z8-host-install-error {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: hsl(var(--muted));
+  font-size: 13px;
+}
+
+.z8-host-install-error {
+  border: 1px solid hsl(0 72% 55% / 0.35);
+  color: hsl(0 72% 42%);
+}
+
+.z8-host-install-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.z8-host-install-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.z8-host-install-progress progress {
+  width: 100%;
+  height: 10px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  accent-color: hsl(var(--brand-accent));
+}
+
+.z8-host-install-progress small {
+  color: hsl(var(--muted-foreground));
+}
+
+.z8-host-install-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 24px 24px;
+}
+
+.z8-host-install-actions button {
+  min-height: 42px;
+}
+
+.z8-host-install-dialog button:focus-visible {
+  outline: 3px solid hsl(var(--ring));
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell *,
+  .shell *::before,
+  .shell *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Account dashboard: compact, single-column layout aligned with the Z8
+   reference surface. Keep the older account selectors above for compatibility
+   with persisted views, then override them here for the authenticated state. */
+.z8-account-page > .panel {
+  overflow: hidden;
+}
+
+.z8-account-page > .panel > .z8-account-content {
+  padding: 0;
+}
+
+.z8-account-shell {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+}
+
+.z8-account-toolbar,
+.z8-account-toolbar-actions,
+.z8-account-banner,
+.z8-account-primary-actions {
+  display: flex;
+  align-items: center;
+}
+
+.z8-account-toolbar,
+.z8-account-banner {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.z8-account-eyebrow {
+  margin: 0 0 5px;
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.z8-account-toolbar h2 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.z8-account-toolbar-actions,
+.z8-account-primary-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.z8-account-toolbar-actions svg,
+.z8-account-banner svg,
+.z8-account-primary-actions svg,
+.z8-key-select-row > svg {
+  width: 15px;
+  height: 15px;
+}
+
+.z8-account-banner {
+  min-height: 72px;
+  justify-content: flex-start;
+  border: 1px solid hsl(82 45% 70%);
+  border-radius: 8px;
+  background: hsl(82 75% 91%);
+  padding: 14px 16px;
+}
+
+.z8-account-avatar {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: hsl(82 100% 66%);
+  color: #14140f;
+}
+
+.z8-account-identity {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
+}
+
+.z8-account-identity strong {
+  overflow: hidden;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.z8-account-identity > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: hsl(80 30% 28%);
+  font-size: 12px;
+}
+
+.z8-account-status-dot {
+  width: 7px;
+  height: 7px;
+  margin: 0;
+  border-radius: 50%;
+  background: hsl(142 55% 36%);
+  box-shadow: none;
+}
+
+.z8-account-key-count {
+  display: grid;
+  gap: 2px;
+  min-width: 74px;
+  color: hsl(80 30% 28%);
+  text-align: right;
+}
+
+.z8-account-key-count strong {
+  color: hsl(var(--foreground));
+  font-size: 16px;
+  line-height: 1;
+}
+
+.z8-account-key-count span {
+  font-size: 11px;
+}
+
+.z8-account-banner > button {
+  min-height: 36px;
+  color: hsl(80 30% 28%);
+}
+
+.z8-account-main,
+.z8-account-center {
+  display: block;
+}
+
+.z8-account-shell .z8-provider-section,
+.z8-account-shell .z8-usage-section {
+  display: grid;
+  gap: 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--card));
+  padding: 16px;
+}
+
+.z8-key-section {
+  margin-top: 0;
+}
+
+.z8-section-heading {
+  align-items: center;
+}
+
+.z8-section-heading-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.z8-section-heading h3 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.z8-section-heading p {
+  margin-top: 3px;
+}
+
+.z8-usage-updated {
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.z8-key-select-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.z8-key-select-row > svg {
+  color: hsl(var(--muted-foreground));
+}
+
+.z8-key-select-row select {
+  min-height: 42px;
+  border-radius: 6px;
+  background: hsl(var(--surface-sunken) / 0.46);
+}
+
+.z8-key-select-row button {
+  min-width: 68px;
+}
+
+.z8-provider-status-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 20px;
+  min-height: 20px;
+}
+
+.z8-provider-status-row > p {
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.z8-provider-health {
+  text-align: right;
+}
+
+.z8-usage-balance {
+  border: 0;
+  border-radius: 6px;
+  background: hsl(var(--surface-sunken) / 0.5);
+  padding: 16px;
+}
+
+.z8-usage-balance strong {
+  font-size: 32px;
+  letter-spacing: 0;
+}
+
+.z8-usage-metrics {
+  border-radius: 6px;
+}
+
+.z8-usage-metrics > div {
+  padding: 14px 16px;
+}
+
+.z8-usage-metrics strong {
+  font-size: 17px;
+}
+
+.z8-usage-summary {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.z8-account-primary-actions {
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.z8-account-primary-actions > button {
+  min-width: 132px;
+  min-height: 42px;
+}
+
+.z8-account-primary-actions > button:first-child {
+  min-width: 176px;
+}
+
+.z8-account-primary-actions > button:first-child:not(:disabled) {
+  border-color: hsl(82 100% 55%);
+  background: hsl(82 100% 66%);
+  color: #14140f;
+  box-shadow: 0 1px 2px rgb(20 20 15 / 0.2), inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+
+@media (max-width: 620px) {
+  .z8-account-auth-page {
+    min-height: calc(100vh - 24px);
+  }
+
+  .z8-account-auth-page .panel-head,
+  .z8-account-auth-page .z8-account-content {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .z8-account-shell {
+    padding: 18px;
+  }
+
+  .z8-account-toolbar,
+  .z8-account-banner {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .z8-account-toolbar-actions {
+    width: 100%;
+  }
+
+  .z8-account-toolbar-actions > button {
+    flex: 1;
+  }
+
+  .z8-account-key-count {
+    margin-left: auto;
+  }
+
+  .z8-section-heading-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .z8-section-heading-actions > button {
+    flex: 1;
+  }
+
+  .z8-provider-status-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .z8-provider-health {
+    text-align: left;
+  }
+
+  .z8-account-banner > button {
+    width: 100%;
+    justify-content: flex-start;
+    padding-left: 0;
+  }
+
+  .z8-key-select-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .z8-key-select-row button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .z8-usage-updated {
+    display: none;
+  }
+}
+
+/* Auth surface: the account gate follows the compact, centered modal used by
+   the Z8 reference flow. The form remains a native form so keyboard submit,
+   labels, and the existing security gates keep working. */
+.z8-account-auth-page {
+  min-height: min(760px, calc(100dvh - 48px));
+  padding: 16px 0;
+}
+
+.z8-account-auth-page::before {
+  background: rgb(20 20 15 / 0.46);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+
+.z8-auth-stage {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: 100%;
+  place-items: center;
+}
+
+.z8-account-panel-stage {
+  width: 100%;
+}
+
+.z8-account-panel-stage > .panel {
+  overflow: hidden;
+}
+
+.z8-account-panel-stage > .panel > .z8-account-content {
+  padding: 0;
+}
+
+.z8-auth-modal {
+  width: 100%;
+  max-width: 560px;
+  max-height: min(720px, calc(100dvh - 28px));
+  overflow: auto;
+  border-radius: 16px;
+  background: hsl(var(--card));
+  box-shadow: 0 24px 72px rgb(20 20 15 / 0.34);
+}
+
+.z8-auth-modal-header {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.z8-auth-title-group,
+.z8-auth-header-actions {
+  min-width: 0;
+}
+
+.z8-auth-title-group {
+  display: grid;
+  gap: 6px;
+}
+
+.z8-auth-eyebrow {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.z8-auth-modal-header h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.z8-auth-header-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.z8-auth-header-actions > p {
+  max-width: 260px;
+  margin: 4px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.z8-auth-close {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px !important;
+  border-radius: 50% !important;
+}
+
+.z8-auth-modal-content {
+  padding: 20px 24px 24px !important;
+}
+
+.z8-auth-form {
+  display: grid;
+  gap: 13px;
+}
+
+.z8-auth-form .field {
+  gap: 6px;
+  margin: 0;
+}
+
+.z8-auth-form .field > label {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.z8-auth-form .field-hint.bad {
+  margin: 0;
+  color: hsl(var(--status-error));
+}
+
+.z8-auth-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.z8-auth-form input:not([type="checkbox"]) {
+  min-height: 44px;
+  border-radius: 10px;
+  padding-inline: 14px;
+  font-size: 14px;
+}
+
+.z8-auth-agreement input[type="checkbox"] {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px !important;
+  padding: 0;
+  border-radius: 3px;
+}
+
+.z8-password-field {
+  position: relative;
+}
+
+.z8-password-field input {
+  padding-right: 54px;
+}
+
+.z8-password-toggle {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px !important;
+  color: hsl(var(--muted-foreground));
+}
+
+.z8-password-toggle:hover {
+  color: hsl(var(--foreground));
+}
+
+.z8-auth-captcha {
+  min-width: 0;
+}
+
+.z8-auth-captcha .account-captcha {
+  display: grid;
+  gap: 8px;
+  min-height: 70px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--surface-sunken) / 0.36);
+  padding: 12px;
+}
+
+.z8-auth-captcha .field-hint {
+  margin: 0;
+}
+
+.z8-auth-captcha .account-captcha-button {
+  width: fit-content;
+  min-height: 40px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  padding: 0 12px;
+}
+
+.z8-auth-field-with-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.z8-auth-field-with-action > button {
+  min-height: 44px;
+}
+
+.z8-registration-verification {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--surface-sunken) / 0.34);
+  padding: 11px 12px;
+}
+
+.z8-registration-verification > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.z8-registration-verification strong {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+}
+
+.z8-registration-verification span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.z8-registration-verification button {
+  flex: none;
+  min-height: 40px;
+}
+
+.z8-auth-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--surface-sunken) / 0.5);
+  color: hsl(var(--muted-foreground));
+  padding: 11px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.z8-auth-status > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.z8-auth-status > button {
+  flex: none;
+}
+
+.z8-auth-status[role="alert"] {
+  border-color: hsl(var(--status-error) / 0.38);
+  color: hsl(var(--status-error));
+}
+
+.z8-auth-agreement {
+  border: 0;
+  padding: 0;
+}
+
+.z8-auth-agreement .z8-agreement-consent {
+  align-items: flex-start;
+  margin: 0;
+}
+
+.z8-auth-agreement .z8-agreement-consent-copy {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.z8-auth-agreement .z8-agreement-consent-copy label {
+  color: hsl(var(--foreground));
+}
+
+.z8-auth-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.z8-auth-submit {
+  width: 100%;
+  min-height: 44px !important;
+  border-radius: 12px !important;
+  background: #2b2c28 !important;
+  color: #fff !important;
+  font-size: 14px;
+}
+
+.z8-auth-submit:hover:not(:disabled) {
+  background: #171814 !important;
+}
+
+.z8-auth-switch {
+  width: 100%;
+  min-height: 40px !important;
+  border-radius: 10px !important;
+  color: hsl(var(--muted-foreground));
+}
+
+.z8-auth-cancel {
+  justify-self: center;
+  min-height: 44px !important;
+}
+
+@media (max-width: 620px) {
+  .z8-account-auth-page {
+    min-height: calc(100dvh - 24px);
+    padding: 12px 0;
+  }
+
+  .z8-auth-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+    border-radius: 16px;
+  }
+
+  .z8-auth-modal-header {
+    padding: 20px 18px 15px;
+  }
+
+  .z8-auth-modal-content {
+    padding: 18px !important;
+  }
+
+  .z8-auth-header-actions > p {
+    display: none;
+  }
+
+  .z8-auth-field-with-action {
+    grid-template-columns: 1fr;
+  }
+
+  .z8-auth-field-with-action > button {
+    width: 100%;
+  }
+
+  .z8-registration-verification {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .z8-registration-verification button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 860px) {
+  .z8-auth-header-actions > p {
+    display: none;
+  }
+
+  .z8-auth-field-with-action {
+    grid-template-columns: 1fr;
+  }
+
+  .z8-auth-field-with-action > button {
+    width: 100%;
+  }
+}
+
+/* Redemption flow: keep the same centered, compact surface as account auth. */
+.z8-recharge-trigger {
+  border-color: hsl(82 100% 55%);
+  background: hsl(82 100% 66%);
+  color: #14140f;
+  box-shadow: 0 1px 2px rgb(20 20 15 / 0.2), inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+
+.z8-recharge-trigger:hover:not(:disabled) {
+  border-color: hsl(82 100% 45%);
+  background: hsl(82 100% 60%);
+  color: #14140f;
+}
+
+.z8-redeem-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(760px, calc(100dvh - 32px));
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  border: 1px solid hsl(var(--border));
+  border-radius: 18px;
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  box-shadow: 0 24px 72px rgb(20 20 15 / 0.34);
+}
+
+.z8-verification-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: min(480px, calc(100vw - 24px));
+  max-height: min(680px, calc(100dvh - 24px));
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  border: 1px solid hsl(var(--border));
+  border-radius: 16px;
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  box-shadow: 0 24px 72px rgb(20 20 15 / 0.34);
+}
+
+.z8-verification-dialog::backdrop {
+  background: rgb(20 20 15 / 0.56);
+  backdrop-filter: blur(2px);
+}
+
+.z8-verification-dialog-shell {
+  display: grid;
+  min-width: 0;
+}
+
+.z8-verification-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0;
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.z8-verification-dialog-head > div {
+  min-width: 0;
+}
+
+.z8-verification-dialog-head h3 {
+  margin: 5px 0 4px;
+  color: hsl(var(--foreground));
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.z8-verification-dialog-head p {
+  max-width: 330px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.z8-verification-close {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px !important;
+  border-radius: 50% !important;
+}
+
+.z8-verification-dialog-content {
+  padding: 20px 24px 24px;
+}
+
+.z8-verification-form {
+  display: grid;
+  gap: 14px;
+}
+
+.z8-verification-form .field {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.z8-verification-form .field > label {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.z8-verification-form input:not([type="checkbox"]) {
+  min-height: 48px;
+  border-radius: 10px;
+  padding-inline: 14px;
+  font-size: 18px;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+
+.z8-verification-hint {
+  margin: -3px 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.z8-verification-captcha {
+  margin-top: 1px;
+}
+
+.z8-verification-actions {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.z8-verification-actions .z8-auth-submit {
+  width: 100%;
+}
+
+.z8-verification-resend {
+  width: 100%;
+  min-height: 36px !important;
+  color: hsl(var(--muted-foreground));
+}
+
+@media (max-width: 620px) {
+  .z8-verification-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+    border-radius: 16px;
+  }
+
+  .z8-verification-dialog-head {
+    padding: 20px 18px 15px;
+  }
+
+  .z8-verification-dialog-content {
+    padding: 18px;
+  }
+
+  .z8-verification-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .z8-verification-actions button {
+    width: 100%;
+  }
+}
+
+.z8-redeem-dialog::backdrop {
+  background: rgb(20 20 15 / 0.58);
+  backdrop-filter: blur(2px);
+}
+
+.z8-redeem-dialog-shell {
+  display: grid;
+  min-width: 0;
+}
+
+.z8-redeem-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0;
+  padding: 28px 32px 22px;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.z8-redeem-title-group {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.z8-redeem-dialog-head h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.z8-redeem-close {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px !important;
+  border-radius: 50% !important;
+}
+
+.z8-redeem-dialog-content {
+  padding: 24px 32px 30px;
+}
+
+.z8-redeem-form {
+  display: grid;
+  gap: 18px;
+}
+
+.z8-redeem-form .field {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.z8-redeem-form .field > label {
+  color: hsl(var(--foreground));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.z8-redeem-form input:not([type="checkbox"]) {
+  min-height: 48px;
+  border-radius: 10px;
+  padding-inline: 14px;
+  font-size: 14px;
+}
+
+.z8-redeem-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.z8-redeem-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.z8-redeem-form-actions button,
+.z8-purchase-button {
+  min-height: 44px;
+}
+
+.z8-redeem-submit {
+  border-color: hsl(82 100% 55%);
+  background: hsl(82 100% 66%);
+  color: #14140f;
+  box-shadow: 0 1px 2px rgb(20 20 15 / 0.2), inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+
+.z8-redeem-submit:hover:not(:disabled) {
+  border-color: hsl(82 100% 45%);
+  background: hsl(82 100% 60%);
+  color: #14140f;
+}
+
+.z8-purchase-button {
+  margin-left: auto;
+  border-color: hsl(82 100% 55%);
+  background: hsl(82 100% 66%);
+  color: #14140f;
+  box-shadow: 0 1px 2px rgb(20 20 15 / 0.18), inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+
+.z8-purchase-button:hover:not(:disabled) {
+  border-color: hsl(82 100% 45%);
+  background: hsl(82 100% 60%);
+  color: #14140f;
+}
+
+@media (max-width: 620px) {
+  .z8-redeem-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+    border-radius: 16px;
+  }
+
+  .z8-redeem-dialog-head {
+    padding: 22px 20px 18px;
+  }
+
+  .z8-redeem-dialog-content {
+    padding: 20px;
+  }
+
+  .z8-redeem-actions,
+  .z8-redeem-form-actions {
+    width: 100%;
+  }
+
+  .z8-redeem-form-actions button,
+  .z8-purchase-button {
+    flex: 1;
+  }
+
+  .z8-purchase-button {
+    margin-left: 0;
+  }
+}

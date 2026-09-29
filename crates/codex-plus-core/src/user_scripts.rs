@@ -1,0 +1,418 @@
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use anyhow::Context;
+use serde::Serialize;
+use serde_json::{Map, Value, json};
+
+
+/// Query the live renderer-side user-script registry through a one-shot CDP
+/// connection. This is intentionally read-only and does not touch the
+/// launcher-owned bridge websocket.
+pub async fn live_runtime_status(debug_port: u16) -> anyhow::Result<Value> {
+    let targets = crate::cdp::list_targets(debug_port).await?;
+    let target = live_runtime_target(&targets)?;
+    let websocket = target
+        .web_socket_debugger_url
+        .as_deref()
+        .context("Codex renderer has no WebSocket URL")?;
+    let response = crate::bridge::evaluate_script(
+        websocket,
+        "(() => JSON.stringify(window.__codexPlusUserScripts?.scripts || {}))()",
+    )
+    .await?;
+    parse_live_runtime_status_response(&response)
+}
+
+fn live_runtime_target(targets: &[crate::cdp::CdpTarget]) -> anyhow::Result<crate::cdp::CdpTarget> {
+    crate::cdp::pick_injectable_codex_page_target(targets)
+}
+
+fn parse_live_runtime_status_response(response: &Value) -> anyhow::Result<Value> {
+    let encoded = response
+        .pointer("/result/result/value")
+        .and_then(Value::as_str)
+        .context("user-script runtime probe returned no value")?;
+    let status: Value =
+        serde_json::from_str(encoded).context("invalid user-script runtime status JSON")?;
+    if !status.is_object() {
+        anyhow::bail!("user-script runtime status must be a JSON object");
+    }
+    Ok(status)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UserScriptConfig {
+    pub enabled: bool,
+    pub scripts: BTreeMap<String, bool>,
+}
+
+impl Default for UserScriptConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scripts: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UserScriptManager {
+    builtin_dir: PathBuf,
+    user_dir: PathBuf,
+    config_path: PathBuf,
+    config_lock: Arc<Mutex<()>>,
+}
+
+impl UserScriptManager {
+    pub fn new(
+        builtin_dir: impl Into<PathBuf>,
+        user_dir: impl Into<PathBuf>,
+        config_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            builtin_dir: builtin_dir.into(),
+            user_dir: user_dir.into(),
+            config_path: config_path.into(),
+            config_lock: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn load_config(&self) -> UserScriptConfig {
+        let _guard = self.config_lock.lock().unwrap();
+        self.load_config_unlocked()
+    }
+
+    fn load_config_unlocked(&self) -> UserScriptConfig {
+        let Ok(text) = fs::read_to_string(&self.config_path) else {
+            return UserScriptConfig::default();
+        };
+        let Ok(Value::Object(raw)) = serde_json::from_str::<Value>(&text) else {
+            return UserScriptConfig::default();
+        };
+        config_from_object(&raw)
+    }
+
+    pub fn save_config(&self, config: &UserScriptConfig) -> anyhow::Result<()> {
+        let _guard = self.config_lock.lock().unwrap();
+        self.save_config_unlocked(config)
+    }
+
+    fn save_config_unlocked(&self, config: &UserScriptConfig) -> anyhow::Result<()> {
+        if let Some(parent) = self.config_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create user script config directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        crate::settings::atomic_write(
+            &self.config_path,
+            serde_json::to_string_pretty(config)?.as_bytes(),
+        )
+    }
+
+    pub fn set_global_enabled(&self, enabled: bool) -> anyhow::Result<UserScriptConfig> {
+        let _guard = self.config_lock.lock().unwrap();
+        let mut config = self.load_config_unlocked();
+        config.enabled = enabled;
+        self.save_config_unlocked(&config)?;
+        Ok(config)
+    }
+
+    pub fn set_script_enabled(&self, key: &str, enabled: bool) -> anyhow::Result<UserScriptConfig> {
+        let _guard = self.config_lock.lock().unwrap();
+        let mut config = self.load_config_unlocked();
+        config.scripts.insert(key.to_string(), enabled);
+        self.save_config_unlocked(&config)?;
+        Ok(config)
+    }
+
+    pub fn delete_user_script(&self, key: &str) -> anyhow::Result<UserScriptConfig> {
+        let Some(file_name) = key.strip_prefix("user:").filter(|value| !value.is_empty()) else {
+            anyhow::bail!("only user scripts can be deleted");
+        };
+        if file_name.contains(['/', '\\']) || file_name == "." || file_name == ".." {
+            anyhow::bail!("invalid user script key");
+        }
+        let path = self.user_dir.join(file_name);
+        let canonical_user_dir = self
+            .user_dir
+            .canonicalize()
+            .or_else(|_| {
+                fs::create_dir_all(&self.user_dir)?;
+                self.user_dir.canonicalize()
+            })
+            .with_context(|| {
+                format!(
+                    "failed to resolve user script directory {}",
+                    self.user_dir.display()
+                )
+            })?;
+        if path.exists() {
+            let canonical_path = path
+                .canonicalize()
+                .with_context(|| format!("failed to resolve user script {}", path.display()))?;
+            if !canonical_path.starts_with(&canonical_user_dir) {
+                anyhow::bail!("refusing to delete script outside user script directory");
+            }
+            fs::remove_file(&canonical_path).with_context(|| {
+                format!("failed to delete user script {}", canonical_path.display())
+            })?;
+        }
+
+        let _guard = self.config_lock.lock().unwrap();
+        let mut config = self.load_config_unlocked();
+        config.scripts.remove(key);
+        self.save_config_unlocked(&config)?;
+        Ok(config)
+    }
+
+    pub fn inventory(&self) -> anyhow::Result<Value> {
+        self.inventory_with_runtime_status(None)
+    }
+
+    /// Build the script inventory and, when available, merge the status recorded
+    /// by the renderer-side loader. The filesystem scan alone cannot tell
+    /// whether a script was actually evaluated, so callers that have access to
+    /// the live page should provide `window.__codexPlusUserScripts.scripts`.
+    pub fn inventory_with_runtime_status(
+        &self,
+        runtime_status: Option<&Value>,
+    ) -> anyhow::Result<Value> {
+        let config = self.load_config();
+        let scripts = self.scan_scripts(&config, runtime_status)?;
+        Ok(json!({
+            "enabled": config.enabled,
+            "builtin_dir": self.builtin_dir.to_string_lossy(),
+            "user_dir": self.user_dir.to_string_lossy(),
+            "scripts": scripts
+        }))
+    }
+
+    pub fn build_enabled_bundle(&self) -> anyhow::Result<String> {
+        let config = self.load_config();
+        if !config.enabled {
+            return Ok(String::new());
+        }
+        let mut blocks = Vec::new();
+        for script in self.scan_script_files(&config)? {
+            if !script.enabled {
+                continue;
+            }
+            let source = fs::read_to_string(&script.path)
+                .unwrap_or_else(|error| format!("throw new Error({});", json!(error.to_string())));
+            blocks.push(wrap_script(&script, &source));
+        }
+        Ok(blocks.join("\n"))
+    }
+
+    fn scan_scripts(
+        &self,
+        config: &UserScriptConfig,
+        runtime_status: Option<&Value>,
+    ) -> anyhow::Result<Vec<Value>> {
+        let runtime_scripts = runtime_status
+            .and_then(|value| value.get("scripts").or(Some(value)))
+            .and_then(Value::as_object);
+        Ok(self
+            .scan_script_files(config)?
+            .into_iter()
+            .map(|script| {
+                let fallback_status = if !config.enabled || !script.enabled {
+                    "disabled"
+                } else {
+                    "not_loaded"
+                };
+                let live = runtime_scripts.and_then(|items| items.get(&script.key));
+                let status = if fallback_status == "disabled" {
+                    fallback_status
+                } else {
+                    live.and_then(|item| item.get("status").and_then(Value::as_str))
+                        .unwrap_or(fallback_status)
+                };
+                let error = if fallback_status == "disabled" {
+                    ""
+                } else {
+                    live.and_then(|item| item.get("error").and_then(Value::as_str))
+                        .unwrap_or("")
+                };
+                json!({
+                    "key": script.key,
+                    "name": script.name,
+                    "source": script.source,
+                    "enabled": script.enabled,
+                    "status": status,
+                    "error": error
+                })
+            })
+            .collect())
+    }
+
+    fn scan_script_files(&self, config: &UserScriptConfig) -> anyhow::Result<Vec<UserScriptFile>> {
+        fs::create_dir_all(&self.user_dir).with_context(|| {
+            format!(
+                "failed to create user scripts directory {}",
+                self.user_dir.display()
+            )
+        })?;
+        let mut scripts = Vec::new();
+        self.append_scripts("builtin", &self.builtin_dir, config, &mut scripts)?;
+        self.append_scripts("user", &self.user_dir, config, &mut scripts)?;
+        Ok(scripts)
+    }
+
+    fn append_scripts(
+        &self,
+        source: &str,
+        directory: &std::path::Path,
+        config: &UserScriptConfig,
+        scripts: &mut Vec<UserScriptFile>,
+    ) -> anyhow::Result<()> {
+        let Ok(entries) = fs::read_dir(directory) else {
+            return Ok(());
+        };
+        let mut paths = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("js"))
+            .collect::<Vec<_>>();
+        paths.sort_by_key(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_lowercase())
+                .unwrap_or_default()
+        });
+
+        for path in paths {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let key = format!("{source}:{name}");
+            scripts.push(UserScriptFile {
+                enabled: config.scripts.get(&key).copied().unwrap_or(true),
+                key,
+                name,
+                source: source.to_string(),
+                path,
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct UserScriptFile {
+    key: String,
+    name: String,
+    source: String,
+    path: PathBuf,
+    enabled: bool,
+}
+
+fn wrap_script(script: &UserScriptFile, source: &str) -> String {
+    format!(
+        r#"
+(() => {{
+  const codexPlusIsNodeTestHarness = typeof process === "object" && !!process.versions?.node;
+  if (!codexPlusIsNodeTestHarness && (window.top !== window || window.self !== window || !window.electronBridge || !/^app:\/\/\-\//i.test(window.location.href))) return;
+  window.__codexPlusUserScripts = window.__codexPlusUserScripts || {{ scripts: {{}} }};
+  const key = {key};
+  window.__codexPlusUserScripts.scripts[key] = {{ key, name: {name}, source: {source_name}, status: "loading", error: "", loadedAt: new Date().toISOString() }};
+  try {{
+{source}
+    window.__codexPlusUserScripts.scripts[key].status = "loaded";
+    window.__codexPlusUserScripts.scripts[key].loadedAt = new Date().toISOString();
+  }} catch (error) {{
+    window.__codexPlusUserScripts.scripts[key].status = "failed";
+    window.__codexPlusUserScripts.scripts[key].error = String(error && (error.stack || error.message) || error);
+  }}
+}})();
+"#,
+        key = json!(script.key).to_string(),
+        name = json!(script.name).to_string(),
+        source_name = json!(script.source).to_string(),
+        source = source
+    )
+}
+
+fn config_from_object(raw: &Map<String, Value>) -> UserScriptConfig {
+    let enabled = raw.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let scripts = raw
+        .get("scripts")
+        .and_then(Value::as_object)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|(key, value)| Some((key.clone(), value.as_bool()?)))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    UserScriptConfig {
+        enabled,
+        scripts,
+    }
+}
+
+#[cfg(test)]
+mod runtime_status_tests {
+    use super::*;
+
+    fn target(id: &str, title: &str, url: &str, websocket: &str) -> crate::cdp::CdpTarget {
+        crate::cdp::CdpTarget {
+            id: id.to_string(),
+            target_type: "page".to_string(),
+            title: title.to_string(),
+            url: url.to_string(),
+            web_socket_debugger_url: Some(websocket.to_string()),
+        }
+    }
+
+    #[test]
+    fn parses_live_runtime_status_response() {
+        let response = json!({
+            "result": { "result": { "value": r#"{"user:test.js":{"status":"loaded","error":""}}"# } }
+        });
+
+        let status = parse_live_runtime_status_response(&response).unwrap();
+
+        assert_eq!(status["user:test.js"]["status"], "loaded");
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_live_runtime_status() {
+        assert!(parse_live_runtime_status_response(&json!({})).is_err());
+        assert!(
+            parse_live_runtime_status_response(&json!({
+                "result": { "result": { "value": "not json" } }
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_live_runtime_status_response(&json!({
+                "result": { "result": { "value": "[]" } }
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn live_runtime_probe_selects_codex_page_over_manager() {
+        let targets = vec![
+            target(
+                "manager",
+                "Codex++ 管理工具",
+                "http://127.0.0.1:1420/",
+                "ws://manager",
+            ),
+            target("main", "Codex", "app://-/index.html", "ws://main"),
+        ];
+
+        let selected = live_runtime_target(&targets).unwrap();
+
+        assert_eq!(selected.id, "main");
+    }
+}
