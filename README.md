@@ -124,6 +124,25 @@ MACOS_BUILD_NUMBER=local BINARY_DIR="$PWD/target/x86_64-apple-darwin/release" \
 
 Apple Silicon 使用 `aarch64-apple-darwin` 和 `arm64` 参数。内部测试包使用临时签名，不代表 Developer ID 签名或公证发布包。
 
+### 自动发版
+
+GitHub Actions 会在推送严格的版本标签（例如 `v1.3.3`）后自动创建 GitHub Release，并构建四个安装包：Windows x64、Windows ARM64、macOS Intel 和 macOS Apple Silicon，同时上传源码、许可证、第三方声明、SHA-256 校验文件和 `latest.json`。
+
+发版前请把以下三个版本号同步为同一个 `X.Y.Z`：
+
+- 根目录 `Cargo.toml` 的 workspace version
+- `apps/codex-plus-manager/package.json` 的 version
+- `apps/codex-plus-manager/src-tauri/tauri.conf.json` 的 version
+
+然后提交并推送代码，再推送版本标签：
+
+```bash
+git tag v1.3.3
+git push origin v1.3.3
+```
+
+工作流会校验标签和三个版本号；版本不一致时会停止，不会发布不匹配的安装包。Windows 安装包目前未配置代码签名，macOS 安装包需要后续配置 Apple Developer ID 签名和公证凭据后才能作为正式签名版本分发。
+
 ## 常见问题
 
 ### 启动按钮没有反应

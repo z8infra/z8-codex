@@ -124,6 +124,25 @@ MACOS_BUILD_NUMBER=local BINARY_DIR="$PWD/target/x86_64-apple-darwin/release" \
 
 For Apple Silicon, use `aarch64-apple-darwin` and the `arm64` argument. Internal packages use temporary signing and are not Developer ID signed or notarized release packages.
 
+### Automated releases
+
+GitHub Actions creates a GitHub Release when a strict version tag such as `v1.3.3` is pushed. It builds four installers: Windows x64, Windows ARM64, macOS Intel, and macOS Apple Silicon. It also uploads the source archive, license, third-party notices, SHA-256 checksums, and `latest.json`.
+
+Before releasing, keep these three version values equal to the same `X.Y.Z`:
+
+- the workspace version in the root `Cargo.toml`
+- `version` in `apps/codex-plus-manager/package.json`
+- `version` in `apps/codex-plus-manager/src-tauri/tauri.conf.json`
+
+Commit and push the version change, then push the tag:
+
+```bash
+git tag v1.3.3
+git push origin v1.3.3
+```
+
+The workflow validates the tag and all three version values and stops before publishing if they differ. Windows installers are currently unsigned, and macOS packages require Apple Developer ID signing and notarization credentials for formal signed distribution.
+
 ## FAQ
 
 ### The Start Codex button does nothing
