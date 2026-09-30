@@ -58,6 +58,16 @@ test("Z8 preset is the branded account-backed relay", () => {
   assert.equal(z8.baseUrl, "https://z8.hk/v1");
   assert.equal(z8.protocol, "responses");
   assert.equal(z8.model, "gpt-6-astra");
+  assert.deepEqual(z8.modelList, [
+    "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+  ]);
   assert.equal(z8.configContents, "model_provider = \"custom\"\n\n[features]\ngoals = true\n");
   assert.equal(PRESETS.some((preset) => /jojo/i.test(preset.name)), false);
 });

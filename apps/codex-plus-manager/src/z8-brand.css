@@ -247,8 +247,20 @@
 }
 
 .z8-account-notice {
+  margin: 0 0 14px;
+  border: 1px solid hsl(var(--border));
   border-radius: 8px;
   background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  padding: 11px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.z8-account-notice[role="alert"] {
+  border-color: hsl(var(--status-error) / 0.38);
+  color: hsl(var(--status-error));
 }
 
 .z8-agreement {
@@ -492,9 +504,8 @@
   }
 }
 
-/* Account dashboard: compact, single-column layout aligned with the Z8
-   reference surface. Keep the older account selectors above for compatibility
-   with persisted views, then override them here for the authenticated state. */
+/* Account workspace: keep account/API controls beside balance/usage while
+   preserving the existing authenticated actions and state surfaces. */
 .z8-account-page > .panel {
   overflow: hidden;
 }
@@ -506,6 +517,8 @@
 .z8-account-shell {
   display: grid;
   gap: 16px;
+  width: min(100%, 1040px);
+  margin: 0 auto;
   padding: 24px;
 }
 
@@ -634,6 +647,29 @@
   display: block;
 }
 
+.z8-account-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas: "usage controls";
+  align-items: stretch;
+  gap: 16px;
+}
+
+.z8-account-column {
+  min-width: 0;
+}
+
+.z8-account-left {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  grid-area: controls;
+}
+
+.z8-account-right {
+  grid-area: usage;
+}
+
 .z8-account-shell .z8-provider-section,
 .z8-account-shell .z8-usage-section {
   display: grid;
@@ -744,8 +780,9 @@
 }
 
 .z8-account-primary-actions {
-  justify-content: center;
-  padding-top: 4px;
+  justify-content: flex-end;
+  border-top: 1px solid hsl(var(--border));
+  padding-top: 16px;
 }
 
 .z8-account-primary-actions > button {
@@ -762,6 +799,21 @@
   background: hsl(82 100% 66%);
   color: #14140f;
   box-shadow: 0 1px 2px rgb(20 20 15 / 0.2), inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+
+@media (max-width: 900px) {
+  .z8-account-columns {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "controls" "usage";
+  }
+
+  .z8-account-primary-actions {
+    justify-content: stretch;
+  }
+
+  .z8-account-primary-actions > button {
+    flex: 1;
+  }
 }
 
 @media (max-width: 620px) {
@@ -1017,7 +1069,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -1046,6 +1098,13 @@
 .z8-auth-captcha .account-captcha-status-row .field-hint {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.z8-auth-captcha .account-captcha-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: none;
 }
 
 .z8-auth-captcha .account-captcha-retry {
@@ -1080,13 +1139,37 @@
 }
 
 .z8-auth-captcha .account-captcha-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: fit-content;
   min-height: 40px;
+  min-width: 84px;
   border: 1px solid hsl(var(--border));
   border-radius: 8px;
-  background: hsl(var(--card));
+  background: hsl(var(--card) / 0.9);
   color: hsl(var(--foreground));
   padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.z8-auth-captcha .account-captcha-button:hover:not(:disabled) {
+  border-color: hsl(var(--foreground) / 0.28);
+  background: hsl(var(--card));
+  box-shadow: 0 2px 8px hsl(var(--foreground) / 0.08);
+}
+
+.z8-auth-captcha .account-captcha-button:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.z8-auth-captcha .account-captcha-cancel {
+  color: hsl(var(--muted-foreground));
 }
 
 .z8-auth-field-with-action {
@@ -1258,6 +1341,22 @@
 
   .z8-auth-field-with-action > button {
     width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .z8-auth-captcha .account-captcha {
+    padding: 10px;
+  }
+
+  .z8-auth-captcha .account-captcha-widget-row {
+    gap: 8px;
+  }
+
+  .z8-auth-captcha .account-captcha-button {
+    min-width: 76px;
+    padding-inline: 9px;
+    font-size: 12px;
   }
 }
 

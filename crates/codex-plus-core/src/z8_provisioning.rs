@@ -23,7 +23,7 @@ pub const Z8_DEFAULT_MODEL: &str = "gpt-6-astra";
 /// manager can render and later replace it without overwriting the user's other
 /// provider settings.
 pub const Z8_DEFAULT_MODEL_LIST: &str =
-    "gpt-6-sol\ngpt-6-astra\ngpt-6-luna\ngpt-5.6-sol\ngpt-5.6-terra\ngpt-5.6-luna\ngpt-5.5";
+    "gpt-6.1-sol\ngpt-6-astra\ngpt-6-sol\ngpt-6-luna\ngpt-5.6-sol\ngpt-5.6-terra\ngpt-5.6-luna\ngpt-5.5";
 pub const Z8_API_KEY_ENV: &str = "OPENAI_API_KEY";
 pub const Z8_DEFAULT_PROFILE_CONFIG: &str = "model = \"gpt-6-astra\"\nmodel_provider = \"custom\"\n\n[features]\ngoals = true\n\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"https://z8.hk/v1\"\n";
 
@@ -941,8 +941,9 @@ mod tests {
         assert_eq!(
             Z8_DEFAULT_MODEL_LIST.lines().collect::<Vec<_>>(),
             vec![
-                "gpt-6-sol",
+                "gpt-6.1-sol",
                 "gpt-6-astra",
+                "gpt-6-sol",
                 "gpt-6-luna",
                 "gpt-5.6-sol",
                 "gpt-5.6-terra",

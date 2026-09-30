@@ -173,23 +173,26 @@ function statusText(state: WidgetState, errorCode?: string | null): string {
 }
 
 function WidgetFrame({ state, errorCode, onCancel, onRetry, children }: { state: WidgetState; errorCode?: string | null; onCancel: () => void; onRetry: () => void; children?: ReactNode }) {
+  const showCancel = state === "ready" || state === "loading";
+  const showRetry = state === "failed" || state === "cancelled";
   return <div className={`account-captcha ${state}`} aria-live="polite">
     <div className="account-captcha-widget-row">
       <div className="account-captcha-widget">{children}</div>
-      {state === "failed" || state === "cancelled" ? <button
-        type="button"
-        className="account-captcha-retry"
-        onClick={onRetry}
-        aria-label="重试安全验证"
-        title="重试安全验证"
-      >
-        <RefreshCw aria-hidden="true" />
-      </button> : null}
+      {showCancel || showRetry ? <div className="account-captcha-actions">
+        {showRetry ? <button
+          type="button"
+          className="account-captcha-retry"
+          onClick={onRetry}
+          aria-label="重试安全验证"
+          title="重试安全验证"
+        >
+          <RefreshCw aria-hidden="true" />
+        </button> : <button type="button" className="account-captcha-button account-captcha-cancel" onClick={onCancel}>取消验证</button>}
+      </div> : null}
     </div>
     <div className="account-captcha-status-row">
       <p className="field-hint" role={state === "failed" ? "alert" : "status"}>{statusText(state, errorCode)}</p>
     </div>
-    {state === "ready" || state === "loading" ? <button type="button" className="account-captcha-button" onClick={onCancel}>取消验证</button> : null}
   </div>;
 }
 

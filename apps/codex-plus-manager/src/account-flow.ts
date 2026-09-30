@@ -280,6 +280,12 @@ const SAFE_COMMAND_MESSAGE_COPY: Record<string, string> = {
   "所选 API Key 当前不可用": "所选 API Key 当前不可用，请刷新后选择其他 Key。",
 };
 
+const CAPTCHA_ERROR_CODES = new Set([
+  "account_captcha_failed",
+  "account_captcha_unavailable",
+  "account_security_challenge",
+]);
+
 /**
  * Maps the stable core error prefix to safe next-step copy. Unknown command
  * messages fall back to generic copy so server details can never echo a key or
@@ -295,4 +301,17 @@ export function accountFailureMessage(message: string, preserveExistingAccount =
   const diagnosticCopy = hasStableCode ? `${copy} 错误代码：${code}` : copy;
   if (!preserveExistingAccount) return diagnosticCopy;
   return `${diagnosticCopy} 现有账户状态已保留。`;
+}
+
+/** Return the stable account error code without exposing server details. */
+export function accountErrorCode(message: string): string {
+  return message.trim().split(":", 1)[0] ?? "";
+}
+
+/**
+ * A failed credential check does not invalidate the browser challenge. Only
+ * challenge-specific failures should force a new proof and widget instance.
+ */
+export function shouldResetCaptchaAfterFailure(message: string): boolean {
+  return CAPTCHA_ERROR_CODES.has(accountErrorCode(message));
 }

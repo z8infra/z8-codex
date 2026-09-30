@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   accountFailureMessage,
+  shouldResetCaptchaAfterFailure,
   AccountCommandResult,
   AccountAuthSettings,
   AccountPayload,
@@ -266,6 +267,11 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
     setCaptchaProof(proof);
   }, []);
 
+  const resetCaptcha = useCallback(() => {
+    setCaptchaProof(null);
+    setCaptchaResetNonce((value) => value + 1);
+  }, []);
+
   const usableKeys = useMemo(
     () => account.keys.filter(isUsableApiKey),
     [account.keys],
@@ -496,13 +502,13 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
         } }
       : { input: { email, password, ...proof } };
     const result = await run<AccountCommandResult<AccountPayload>>(command, args);
-    setCaptchaProof(null);
-    setCaptchaResetNonce((value) => value + 1);
     if (!result) return;
     if (!isSuccessfulAccountCommand(result)) {
       setNotice(accountFailureMessage(result.message, account.authenticated));
+      if (shouldResetCaptchaAfterFailure(result.message)) resetCaptcha();
       return;
     }
+    resetCaptcha();
     setPassword("");
     const next = commitAccount(result);
     setPendingTwoFactor(next.pendingTwoFactor === true);
@@ -567,10 +573,9 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
     }
     const requestedEmail = email.trim();
     const result = await run<AccountCommandResult<{ email?: string | null; sent: boolean }>>("z8_send_verification_code", { input: { email: requestedEmail, ...(captchaProof ?? {}) } });
-    setCaptchaProof(null);
-    setCaptchaResetNonce((value) => value + 1);
     if (!result) return;
     if (isSuccessfulAccountCommand(result)) {
+      resetCaptcha();
       setVerificationSent(true);
       setVerificationEmail(requestedEmail.toLowerCase());
       verificationAvailableAt.current = Date.now() + 60_000;
@@ -580,6 +585,7 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
       setNotice(result.message || "验证码已发送，请查收邮箱。");
     } else {
       setNotice(accountFailureMessage(result.message, account.authenticated));
+      if (shouldResetCaptchaAfterFailure(result.message)) resetCaptcha();
     }
   };
 
@@ -831,49 +837,54 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
           ) : (
             <div className="z8-account-shell">
               <header className="z8-account-toolbar">
-                <div><p className="z8-account-eyebrow">Z8 ACCOUNT</p><h2>余额与用量</h2></div>
+                <div><p className="z8-account-eyebrow">Z8 ACCOUNT</p><h2>Z8 账户</h2></div>
                 <div className="z8-account-toolbar-actions">
                   <Button variant="secondary" disabled={busy !== null} onClick={() => void refreshAccount("z8_refresh_session")} title="刷新账户会话"><RefreshCw aria-hidden="true" />刷新</Button>
                   <Button ref={redeemTriggerRef} variant="secondary" className="z8-recharge-trigger" disabled={busy !== null} onClick={() => redeemDialogRef.current?.showModal()} title="充值或兑换权益"><CreditCard aria-hidden="true" />充值</Button>
                 </div>
               </header>
-              <section className="z8-account-banner" aria-label="账户状态">
-                <div className="z8-account-avatar" aria-hidden="true"><UserRound /></div>
-                <div className="z8-account-identity"><strong>{account.email ?? "已登录"}</strong><span><span className="z8-account-status-dot" aria-hidden="true" />账户正常</span></div>
-                <Button variant="ghost" disabled={busy !== null} onClick={() => void logout()} title="退出 Z8 账户"><LogOut aria-hidden="true" />退出</Button>
-              </section>
-              <section className="z8-provider-section z8-key-section" aria-labelledby={`${fieldId}-provider-heading`}>
-                <div className="z8-section-heading"><div><h3 id={`${fieldId}-provider-heading`}>选择 API Key</h3><p>选择后立即写入 Z8 Provider</p></div><div className="z8-section-heading-actions"><Button variant="outline" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleCheck()} title="检查 Z8 Provider"><Activity aria-hidden="true" />检查</Button><Button variant="outline" disabled={busy !== null || !onReset} onClick={() => void handleReset()} title="恢复 Z8 默认供应商配置"><RotateCcw aria-hidden="true" />重置配置</Button></div></div>
-                {account.keys.length ? <div className="z8-key-select-row"><KeyRound aria-hidden="true" /><Label htmlFor={`${fieldId}-key`} className="sr-only">API Key</Label><select id={`${fieldId}-key`} value={selectedKey} onChange={(event) => { const nextKey = event.currentTarget.value; resetLaunchState(); setSelectedKey(nextKey); setProviderCheck(null); setProviderAppliedKey(null); void handleApply(nextKey); }} disabled={busy !== null || launchState === "starting"}><option value="" disabled>请选择 API Key</option>{account.keys.map((key) => <option key={key.id} value={key.id} disabled={!isUsableApiKey(key)}>{key.name} · {key.secret.masked} · {key.status}</option>)}</select><Button variant="secondary" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleApply()} title="应用当前 API Key"><Check aria-hidden="true" />使用</Button></div> : <p className="field-hint">当前账户没有可用 API Key，请先兑换或刷新。</p>}
-                {providerAppliedKey === selectedKey && selectedKey || providerCheck ? (
-                  <div className="z8-provider-status-row" aria-live="polite">
-                    {providerAppliedKey === selectedKey && selectedKey ? <p className="field-hint good z8-provider-applied" role="status">已写入 Z8 Provider，可启动 Codex。</p> : <span aria-hidden="true" />}
-                    {providerCheck ? <p role="status" className={`z8-provider-health ${providerCheck.status === "ok" || providerCheck.status === "healthy" ? "good" : "bad"}`}>{providerCheck.message}{providerCheck.latencyMs ? ` · ${providerCheck.latencyMs}ms` : ""}</p> : <span aria-hidden="true" />}
-                  </div>
-                ) : null}
-              </section>
-              <section className="z8-usage-section" aria-labelledby={`${fieldId}-usage-heading`}>
-                <div className="z8-section-heading"><div><h3 id={`${fieldId}-usage-heading`}>账户用量</h3><p>统计来自当前 API Key</p></div><span className="z8-usage-updated">{usage ? `更新于 ${new Date(usage.observedAtMs).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "等待同步"}</span></div>
-                {usageLoading ? <p className="field-hint" role="status">正在读取账户用量…</p> : usageError ? <p className="field-hint" role="alert">{usageError}</p> : usage ? (
-                  <>
-                    <div className="z8-usage-balance"><span>可用余额</span><strong>{usage.isUnlimited ? "不限" : formatUsageAmount(usage.remaining ?? usage.balance ?? usage.quota?.remaining, usage.unit ?? usage.quota?.unit)}</strong><small>{usage.accountStatus || (usage.isValid === false ? "账户不可用" : "已同步")}</small></div>
-                    <div className="z8-usage-metrics" aria-label="账户用量统计">
-                      <div><span>今日请求</span><strong>{formatUsageNumber(usage.usage?.today?.requests)}</strong></div>
-                      <div><span>今日 Token</span><strong>{formatUsageNumber(usage.usage?.today?.totalTokens)}</strong></div>
-                      <div><span>今日实际消耗</span><strong>{formatUsageAmount(usage.usage?.today?.actualCost ?? usage.usage?.today?.cost, usage.unit)}</strong></div>
-                    </div>
-                    <p className="z8-usage-summary">累计 {formatUsageNumber(usage.usage?.total?.requests)} 次请求 · {formatUsageNumber(usage.usage?.total?.totalTokens)} Token · 实际消耗 {formatUsageAmount(usage.usage?.total?.actualCost ?? usage.usage?.total?.cost, usage.unit)}</p>
-                  </>
-                ) : <p className="field-hint">暂无用量数据，请先选择可用的 API Key。</p>}
-              </section>
-              <footer className="z8-account-primary-actions">
-                <Button disabled={launchButtonDisabled} onClick={() => void handleLaunch()} title={launchState === "failed" ? "重试启动 Z8 Codex" : "启动 Z8 Codex"} aria-busy={launchState === "starting"}>
-                  {launchState === "starting" ? <RefreshCw style={{ animation: "spin 850ms linear infinite" }} aria-hidden="true" /> : launchState === "started" ? <Check aria-hidden="true" /> : <Rocket aria-hidden="true" />}
-                  {launchButtonLabel}
-                </Button>
-              </footer>
+              <div className="z8-account-columns">
+                <div className="z8-account-column z8-account-left">
+                  <section className="z8-account-banner" aria-label="账户状态">
+                    <div className="z8-account-avatar" aria-hidden="true"><UserRound /></div>
+                    <div className="z8-account-identity"><strong>{account.email ?? "已登录"}</strong><span><span className="z8-account-status-dot" aria-hidden="true" />账户正常</span></div>
+                    <Button variant="ghost" disabled={busy !== null} onClick={() => void logout()} title="退出 Z8 账户"><LogOut aria-hidden="true" />退出</Button>
+                  </section>
+                  <section className="z8-provider-section z8-key-section" aria-labelledby={`${fieldId}-provider-heading`}>
+                    <div className="z8-section-heading"><div><h3 id={`${fieldId}-provider-heading`}>选择 API Key</h3><p>选择后立即写入 Z8 Provider</p></div><div className="z8-section-heading-actions"><Button variant="outline" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleCheck()} title="检查 Z8 Provider"><Activity aria-hidden="true" />检查</Button><Button variant="outline" disabled={busy !== null || !onReset} onClick={() => void handleReset()} title="恢复 Z8 默认供应商配置"><RotateCcw aria-hidden="true" />重置配置</Button></div></div>
+                    {account.keys.length ? <div className="z8-key-select-row"><KeyRound aria-hidden="true" /><Label htmlFor={`${fieldId}-key`} className="sr-only">API Key</Label><select id={`${fieldId}-key`} value={selectedKey} onChange={(event) => { const nextKey = event.currentTarget.value; resetLaunchState(); setSelectedKey(nextKey); setProviderCheck(null); setProviderAppliedKey(null); void handleApply(nextKey); }} disabled={busy !== null || launchState === "starting"}><option value="" disabled>请选择 API Key</option>{account.keys.map((key) => <option key={key.id} value={key.id} disabled={!isUsableApiKey(key)}>{key.name} · {key.secret.masked} · {key.status}</option>)}</select><Button variant="secondary" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleApply()} title="应用当前 API Key"><Check aria-hidden="true" />使用</Button></div> : <p className="field-hint">当前账户没有可用 API Key，请先兑换或刷新。</p>}
+                    {providerAppliedKey === selectedKey && selectedKey || providerCheck ? (
+                      <div className="z8-provider-status-row" aria-live="polite">
+                        {providerAppliedKey === selectedKey && selectedKey ? <p className="field-hint good z8-provider-applied" role="status">已写入 Z8 Provider，可启动 Codex。</p> : <span aria-hidden="true" />}
+                        {providerCheck ? <p role="status" className={`z8-provider-health ${providerCheck.status === "ok" || providerCheck.status === "healthy" ? "good" : "bad"}`}>{providerCheck.message}{providerCheck.latencyMs ? ` · ${providerCheck.latencyMs}ms` : ""}</p> : <span aria-hidden="true" />}
+                      </div>
+                    ) : null}
+                  </section>
+                  <footer className="z8-account-primary-actions">
+                    <Button disabled={launchButtonDisabled} onClick={() => void handleLaunch()} title={launchState === "failed" ? "重试启动 Z8 Codex" : "启动 Z8 Codex"} aria-busy={launchState === "starting"}>
+                      {launchState === "starting" ? <RefreshCw style={{ animation: "spin 850ms linear infinite" }} aria-hidden="true" /> : launchState === "started" ? <Check aria-hidden="true" /> : <Rocket aria-hidden="true" />}
+                      {launchButtonLabel}
+                    </Button>
+                  </footer>
+                </div>
+                <section className="z8-usage-section z8-account-column z8-account-right" aria-labelledby={`${fieldId}-usage-heading`}>
+                  <div className="z8-section-heading"><div><h3 id={`${fieldId}-usage-heading`}>余额与用量</h3><p>统计来自当前 API Key</p></div><span className="z8-usage-updated">{usage ? `更新于 ${new Date(usage.observedAtMs).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "等待同步"}</span></div>
+                  {usageLoading ? <p className="field-hint" role="status">正在读取账户用量…</p> : usageError ? <p className="field-hint" role="alert">{usageError}</p> : usage ? (
+                    <>
+                      <div className="z8-usage-balance"><span>可用余额</span><strong>{usage.isUnlimited ? "不限" : formatUsageAmount(usage.remaining ?? usage.balance ?? usage.quota?.remaining, usage.unit ?? usage.quota?.unit)}</strong><small>{usage.accountStatus || (usage.isValid === false ? "账户不可用" : "已同步")}</small></div>
+                      <div className="z8-usage-metrics" aria-label="账户用量统计">
+                        <div><span>今日请求</span><strong>{formatUsageNumber(usage.usage?.today?.requests)}</strong></div>
+                        <div><span>今日 Token</span><strong>{formatUsageNumber(usage.usage?.today?.totalTokens)}</strong></div>
+                        <div><span>今日实际消耗</span><strong>{formatUsageAmount(usage.usage?.today?.actualCost ?? usage.usage?.today?.cost, usage.unit)}</strong></div>
+                      </div>
+                      <p className="z8-usage-summary">累计 {formatUsageNumber(usage.usage?.total?.requests)} 次请求 · {formatUsageNumber(usage.usage?.total?.totalTokens)} Token · 实际消耗 {formatUsageAmount(usage.usage?.total?.actualCost ?? usage.usage?.total?.cost, usage.unit)}</p>
+                    </>
+                  ) : <p className="field-hint">暂无用量数据，请先选择可用的 API Key。</p>}
+                </section>
+              </div>
             </div>
           )}
+          {notice ? <div className="z8-account-notice" role={account.authenticated ? "status" : "alert"} aria-live="polite">{notice}</div> : null}
         </CardContent>
       </Card>
       </div>
@@ -920,7 +931,6 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
           </div>
         </dialog>
       ) : null}
-      {notice ? <div className="z8-account-notice" role="status">{notice}</div> : null}
     </div>
   );
 }
