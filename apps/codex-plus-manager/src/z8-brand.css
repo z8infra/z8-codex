@@ -871,7 +871,7 @@
 
 .z8-auth-modal {
   width: 100%;
-  max-width: 400px;
+  max-width: 480px;
   max-height: min(720px, calc(100dvh - 28px));
   overflow: auto;
   border-radius: 16px;
@@ -1014,15 +1014,24 @@
 }
 
 .z8-auth-captcha .account-captcha-widget-row {
-  display: flex;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
 .z8-auth-captcha .account-captcha-widget {
   min-width: 0;
-  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.z8-auth-captcha .account-captcha-widget iframe {
+  display: block;
+  width: 100%;
+  max-width: 100%;
 }
 
 .z8-auth-captcha .field-hint {
@@ -1030,27 +1039,24 @@
 }
 
 .z8-auth-captcha .account-captcha-status-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: block;
   min-width: 0;
 }
 
 .z8-auth-captcha .account-captcha-status-row .field-hint {
   min-width: 0;
-  flex: 1 1 auto;
+  overflow-wrap: anywhere;
 }
 
 .z8-auth-captcha .account-captcha-retry {
   display: inline-flex;
-  flex: 0 0 32px;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  min-height: 32px !important;
-  margin-top: 2px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px !important;
+  margin: 0;
   padding: 0;
   border: 1px solid hsl(var(--border));
   border-radius: 8px;

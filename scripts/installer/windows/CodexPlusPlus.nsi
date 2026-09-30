@@ -1,9 +1,11 @@
 ﻿Unicode true
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
+!include "LogicLib.nsh"
 !include "x64.nsh"
 
 !ifndef VERSION
-  !define VERSION "1.3.2"
+  !define VERSION "1.3.5"
 !endif
 !ifndef ARCH
   !define ARCH "x64"
@@ -27,6 +29,9 @@ SetCompressor /SOLID lzma
 ; Never offer Ignore when an installed executable cannot be replaced.
 AllowSkipFiles off
 
+Var Z8_UPDATE_MODE
+Var Z8_INSTALL_RETRY_COUNT
+
 !define MUI_ICON "${ROOT}\apps\codex-plus-manager\src-tauri\icons\icon.ico"
 !define MUI_UNICON "${ROOT}\apps\codex-plus-manager\src-tauri\icons\icon.ico"
 
@@ -40,6 +45,15 @@ AllowSkipFiles off
 !insertmacro MUI_LANGUAGE "English"
 
 Function .onInit
+  StrCpy $Z8_UPDATE_MODE "0"
+  ; Only the in-app updater supplies this marker. A manually opened installer
+  ; must retain the normal fail-closed behavior when a process owns a file.
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} "$R0" "/Z8Update" $R1
+  ${IfNot} ${Errors}
+    StrCpy $Z8_UPDATE_MODE "1"
+  ${EndIf}
 !if "${ARCH}" == "arm64"
   ${IfNot} ${IsNativeARM64}
     MessageBox MB_OK|MB_ICONSTOP "此安装包仅支持 Windows ARM64。请下载与电脑芯片匹配的版本。"
@@ -51,6 +65,16 @@ Function .onInit
     Abort "Windows x64 required"
   ${EndIf}
 !endif
+FunctionEnd
+
+Function z8_update_close_processes
+  ; This helper is called only for an in-app update. The names are unique to
+  ; Z8's installed binaries, so a separately installed Codex++ is untouched.
+  ; Give the manager time to return the update result and exit gracefully.
+  Sleep 1000
+  ExecWait '"$SYSDIR\taskkill.exe" /F /T /IM z8-codex-manager.exe'
+  ExecWait '"$SYSDIR\taskkill.exe" /F /T /IM z8-codex.exe'
+  Sleep 500
 FunctionEnd
 
 ; Windows fixed-file versions require four numeric components. Preserve the full
@@ -68,6 +92,13 @@ VIAddVersionKey /LANG=${LANG_ENGLISH} "OriginalFilename" "Z8Codex-${VERSION}-win
 Section "Install"
   SetShellVarContext current
   SetOutPath "$INSTDIR"
+
+  ${If} $Z8_UPDATE_MODE == "1"
+    Call z8_update_close_processes
+  ${EndIf}
+
+  StrCpy $Z8_INSTALL_RETRY_COUNT "0"
+z8_install_preflight:
 
   ; Probe only the files at the selected Z8 install path. Append mode requests
   ; write access without truncating the file; a write lock is detected here.
@@ -97,9 +128,22 @@ z8_install_check_legacy_manager:
   FileClose $0
   Goto z8_install_ready
 z8_install_locked:
-  MessageBox MB_OK|MB_ICONEXCLAMATION "请先关闭正在运行的 Z8 Codex，再重新安装。"
+  ; A process can take a moment to release its executable after it receives a
+  ; close request. Retry the preflight instead of aborting with a stale lock.
+  IntOp $Z8_INSTALL_RETRY_COUNT $+ 1
+  ${If} $Z8_INSTALL_RETRY_COUNT <= 60
+    Sleep 500
+    Goto z8_install_preflight
+  ${EndIf}
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Z8 Codex 文件仍在使用。请退出托盘中的 Z8 Codex，然后点击重试。" IDRETRY z8_install_retry
   SetErrorLevel 2
   Abort "Z8 Codex 可执行文件正在使用或无法写入"
+z8_install_retry:
+  StrCpy $Z8_INSTALL_RETRY_COUNT "0"
+  ${If} $Z8_UPDATE_MODE == "1"
+    Call z8_update_close_processes
+  ${EndIf}
+  Goto z8_install_preflight
 z8_install_ready:
 
   ClearErrors
