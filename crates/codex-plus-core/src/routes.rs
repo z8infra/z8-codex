@@ -89,7 +89,6 @@ pub trait BridgeRuntimeService: Send + Sync {
     }
     async fn backend_status(&self) -> anyhow::Result<Value>;
     async fn codex_model_catalog(&self) -> anyhow::Result<Value>;
-    async fn ads(&self) -> anyhow::Result<Value>;
     async fn create_share(&self, payload: Value) -> anyhow::Result<Value> {
         crate::share::create_share(payload).await
     }
@@ -191,7 +190,6 @@ pub async fn handle_bridge_request(
         "/codex-model-catalog" | "/codex-config-model" => ctx.runtime.codex_model_catalog().await,
         "/diagnostics/log" => diagnostic_log_value(payload.clone()),
         "/llm-proxy" => llm_proxy_value(payload.clone()).await,
-        "/ads" => ctx.runtime.ads().await,
         "/share/create" => ctx.runtime.create_share(payload.clone()).await,
         "/zed-remote/status" => ctx.runtime.zed_remote_status().await,
         "/zed-remote/resolve-host" => ctx.runtime.resolve_zed_remote_host(payload.clone()).await,
@@ -509,10 +507,6 @@ impl BridgeRuntimeService for CoreRuntimeService {
 
     async fn codex_model_catalog(&self) -> anyhow::Result<Value> {
         Ok(crate::model_catalog::read_codex_model_catalog().await)
-    }
-
-    async fn ads(&self) -> anyhow::Result<Value> {
-        crate::ads::fetch_ad_list().await
     }
 
     async fn zed_remote_status(&self) -> anyhow::Result<Value> {
