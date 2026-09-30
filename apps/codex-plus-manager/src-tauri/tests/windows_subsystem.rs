@@ -348,8 +348,9 @@ fn provider_import_commands_return_metadata_only() {
     assert!(commands_rs.contains(
         "pub async fn refresh_user_script_inventory() -> CommandResult<SettingsMutationPayload>"
     ));
-    assert!(commands_rs.contains(
-        "pub fn set_user_script_enabled(key: String, enabled: bool) -> CommandResult<SettingsMutationPayload>"
+    let compact_commands = commands_rs.split_whitespace().collect::<String>();
+    assert!(compact_commands.contains(
+        "pubfnset_user_script_enabled(key:String,enabled:bool,)->CommandResult<SettingsMutationPayload>"
     ));
     assert!(commands_rs.contains(
         "pub fn delete_user_script(key: String) -> CommandResult<SettingsMutationPayload>"
