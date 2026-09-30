@@ -19,10 +19,6 @@ export const Z8_BRAND = {
 export const Z8_FEATURES = {
   /** Z8 发行版从 GitHub Release 的 Z8Codex 资产检查并安装更新。 */
   onlineUpdates: true,
-  /** 首页不展示上游广告或赞助商卡片。 */
-  sponsorBoard: false,
-  /** 不展示上游推荐内容页面。 */
-  recommendations: false,
   /** 第一版不开放第三方 Dream Skin/皮肤市场。 */
   dreamSkin: false,
   /** 第一版不开放 Zed Remote 项目入口。 */
@@ -43,7 +39,6 @@ export const Z8_DISABLED_ROUTES = [
   "dreamSkin",
   "zedRemote",
   "userScripts",
-  "recommendations",
 ] as const;
 
 export function isZ8FeatureEnabled(feature?: Z8Feature): boolean {
