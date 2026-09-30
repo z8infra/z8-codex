@@ -130,7 +130,7 @@ z8_install_check_legacy_manager:
 z8_install_locked:
   ; A process can take a moment to release its executable after it receives a
   ; close request. Retry the preflight instead of aborting with a stale lock.
-  IntOp $Z8_INSTALL_RETRY_COUNT $+ 1
+  IntOp $Z8_INSTALL_RETRY_COUNT $Z8_INSTALL_RETRY_COUNT + 1
   ${If} $Z8_INSTALL_RETRY_COUNT <= 60
     Sleep 500
     Goto z8_install_preflight

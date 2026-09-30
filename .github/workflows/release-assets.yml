@@ -231,6 +231,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
+          draft: true
+          fail_on_unmatched_files: true
           files: |
             dist/windows/*.exe
             dist/windows/*.zip
@@ -321,6 +323,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
+          draft: true
+          fail_on_unmatched_files: true
           files: |
             dist/macos/*.dmg
             dist/macos/*.zip
