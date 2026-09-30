@@ -26,11 +26,11 @@ try {
     Push-Location $scriptDirectory
     try {
         foreach ($arch in @('x64', 'arm64')) {
-            & $makensis /V1 /INPUTCHARSET UTF8 /DVERSION=1.3.2 "/DARCH=$arch" CodexPlusPlus.nsi
+            & $makensis /V1 /INPUTCHARSET UTF8 /DVERSION=1.3.8 "/DARCH=$arch" CodexPlusPlus.nsi
             if ($LASTEXITCODE -ne 0) {
                 throw "NSIS $arch compile failed with exit code $LASTEXITCODE"
             }
-            $package = Join-Path $fixtureRoot "dist/windows/Z8Codex-1.3.2-windows-$arch-setup.exe"
+            $package = Join-Path $fixtureRoot "dist/windows/Z8Codex-1.3.8-windows-$arch-setup.exe"
             if (-not (Test-Path -LiteralPath $package)) {
                 throw "NSIS did not create $package"
             }
@@ -40,7 +40,7 @@ try {
             # NSIS writes the expected validation error to stderr. Temporarily
             # allow that native stderr so the exit code can be asserted below.
             $ErrorActionPreference = 'Continue'
-            & $makensis /V1 /INPUTCHARSET UTF8 /DVERSION=1.3.2 /DARCH=invalid CodexPlusPlus.nsi 2>&1 | Out-Null
+            & $makensis /V1 /INPUTCHARSET UTF8 /DVERSION=1.3.8 /DARCH=invalid CodexPlusPlus.nsi 2>&1 | Out-Null
             $invalidArchitectureExitCode = $LASTEXITCODE
         }
         finally {

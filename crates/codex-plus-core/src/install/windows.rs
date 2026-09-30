@@ -10,6 +10,7 @@ const UNINSTALL_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Unins
 const LEGACY_UNINSTALL_SUBKEY: &str =
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++";
 const URL_PROTOCOL_SUBKEY: &str = r"Software\Classes\codexplusplus";
+const DREAM_SKIN_URL_PROTOCOL_SUBKEY: &str = r"Software\Classes\dreamskin";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowsEntrypointPlan {
@@ -105,6 +106,16 @@ pub fn uninstall_shortcuts(options: &InstallOptions) -> anyhow::Result<()> {
         r"{URL_PROTOCOL_SUBKEY}\shell"
     ));
     let _ = crate::windows_integration::delete_current_user_key(URL_PROTOCOL_SUBKEY);
+    let _ = crate::windows_integration::delete_current_user_key(&format!(
+        r"{DREAM_SKIN_URL_PROTOCOL_SUBKEY}\shell\open\command"
+    ));
+    let _ = crate::windows_integration::delete_current_user_key(&format!(
+        r"{DREAM_SKIN_URL_PROTOCOL_SUBKEY}\shell\open"
+    ));
+    let _ = crate::windows_integration::delete_current_user_key(&format!(
+        r"{DREAM_SKIN_URL_PROTOCOL_SUBKEY}\shell"
+    ));
+    let _ = crate::windows_integration::delete_current_user_key(DREAM_SKIN_URL_PROTOCOL_SUBKEY);
     let _ = crate::windows_integration::delete_current_user_key(LEGACY_UNINSTALL_SUBKEY);
     let _ = crate::windows_integration::delete_current_user_key(UNINSTALL_SUBKEY);
     Ok(())
@@ -168,7 +179,11 @@ fn register_url_protocol(manager_path: &str) -> anyhow::Result<()> {
         "URL:Z8 Codex Import Protocol",
         manager_path,
     )?;
-    Ok(())
+    register_url_protocol_key(
+        DREAM_SKIN_URL_PROTOCOL_SUBKEY,
+        "URL:DreamSkin Community Theme Protocol",
+        manager_path,
+    )
 }
 
 #[cfg(windows)]

@@ -16,6 +16,6 @@ test("Z8 first-render navigation and overview omit upstream-only surfaces", asyn
 
   assert.ok(navigation, "Manager renders its navigation");
   assert.match(navigation, /Z8 账户/);
-  assert.doesNotMatch(navigation, /推荐内容|Zed 远程项目/);
+  assert.doesNotMatch(navigation, /推荐内容|皮肤管理|Zed 远程项目|脚本市场/);
   assert.doesNotMatch(markup, /赞助商推荐|暂无赞助商推荐/);
 });

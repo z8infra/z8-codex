@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use codex_plus_core::app_paths::{
     build_codex_executable, codex_app_version, find_bundled_codex_cli, find_latest_codex_app_dir,
-    find_latest_codex_app_dir_from_roots, find_macos_codex_app,
+    find_latest_codex_app_dir_from_roots, find_linux_codex_app, find_macos_codex_app,
     normalize_codex_app_path, packaged_app_user_model_id, resolve_codex_app_dir_with_saved,
     user_data_candidates_from,
 };
@@ -2096,6 +2096,13 @@ async fn default_launch_hooks_provider_sync_enabled_returns_explicit_error() {
     );
 }
 
+#[test]
+fn paused_dream_skin_does_not_reapply_the_native_base_theme_on_launch() {
+    let source =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/launcher.rs")).unwrap();
+
+    assert!(source.contains("!settings.codex_app_dream_skin_paused"));
+}
 
 #[tokio::test]
 async fn native_browser_lifecycle_uses_one_settings_snapshot_and_stops_on_success_or_failure() {

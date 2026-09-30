@@ -8,7 +8,6 @@ Z8 Codex is an account, provider, and launch manager for the official Codex desk
 
 <p align="center">
   <a href="https://z8.hk/">Z8 website</a> ·
-  <a href="https://github.com/z8infra/z8-codex">Project repository</a> ·
   <a href="https://github.com/BigPizzaV3/CodexPlusPlus">Upstream project</a> ·
   <a href="LICENSE">AGPL-3.0-only</a>
 </p>
@@ -61,11 +60,12 @@ Z8 Codex requires the official Codex desktop app to be installed locally before 
 
 ### Install Z8 Codex
 
-Release packages are provided for each supported platform and architecture:
+Internal test packages are provided for each supported platform and architecture:
 
-- Windows x64: installer `Z8Codex-*-windows-x64-setup.exe` and ZIP
-- macOS Intel: DMG and ZIP (`Z8Codex-*-macos-x64.*`)
-- macOS Apple Silicon: DMG and ZIP (`Z8Codex-*-macos-arm64.*`)
+- Windows x64: `Z8Codex-*-windows-x64-setup.exe`
+- Windows ARM64: `Z8Codex-*-windows-arm64-setup.exe`
+- macOS Intel: `Z8Codex-*-macos-x64.dmg`
+- macOS Apple Silicon: `Z8Codex-*-macos-arm64.dmg`
 
 After installation, open “Z8 Codex Manager” and:
 
@@ -118,29 +118,10 @@ npm ci --prefix apps/codex-plus-manager
 npm run vite:build --prefix apps/codex-plus-manager
 cargo build --release --locked --target x86_64-apple-darwin
 MACOS_BUILD_NUMBER=local BINARY_DIR="$PWD/target/x86_64-apple-darwin/release" \
-  bash scripts/installer/macos/package-dmg.sh 1.3.2 x64
+  bash scripts/installer/macos/package-dmg.sh 1.3.8 x64
 ```
 
 For Apple Silicon, use `aarch64-apple-darwin` and the `arm64` argument. Internal packages use temporary signing and are not Developer ID signed or notarized release packages.
-
-### Automated releases
-
-GitHub Actions creates a GitHub Release when a strict version tag such as `v1.3.3` is pushed. It publishes six download packages: a Windows x64 installer and ZIP, macOS Intel DMG and ZIP, and macOS Apple Silicon DMG and ZIP, together with `latest.json`. GitHub also provides the Source code ZIP and tar.gz for the tagged commit automatically.
-
-Before releasing, keep these three version values equal to the same `X.Y.Z`:
-
-- the workspace version in the root `Cargo.toml`
-- `version` in `apps/codex-plus-manager/package.json`
-- `version` in `apps/codex-plus-manager/src-tauri/tauri.conf.json`
-
-Commit and push the version change, then push the tag:
-
-```bash
-git tag v1.3.3
-git push origin v1.3.3
-```
-
-The workflow validates the tag and all three version values and stops before publishing if they differ. Windows installers are currently unsigned, and macOS packages require Apple Developer ID signing and notarization credentials for formal signed distribution.
 
 ## FAQ
 

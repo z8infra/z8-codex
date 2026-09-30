@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   prepare-release:
+    if: github.repository == 'z8infra/z8-codex'
     name: Create release
     runs-on: ubuntu-latest
     outputs:

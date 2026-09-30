@@ -41,6 +41,16 @@ test("DeepSeek preset uses the official Responses integration", () => {
   assert.deepEqual(preset.modelList, ["deepseek-v4-flash", "deepseek-v4-pro"]);
 });
 
+test("GrooRoute preset uses the configured sponsor endpoint", () => {
+  const preset = PRESETS.find((candidate) => candidate.id === "grooroute");
+  assert.ok(preset);
+  assert.equal(preset.name, "GrooRoute");
+  assert.equal(preset.baseUrl, "https://grooroute.com");
+  assert.equal(preset.protocol, "responses");
+  assert.equal(preset.model, "gpt-5.5");
+  assert.equal(preset.apiKeyUrl, "https://grooroute.com/register?aff=2B3KJR5SRNTX");
+});
+
 test("Z8 preset is the branded account-backed relay", () => {
   const z8 = PRESETS.find((preset) => preset.id === "z8");
   assert.ok(z8);

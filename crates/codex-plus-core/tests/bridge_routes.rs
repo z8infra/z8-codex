@@ -468,7 +468,7 @@ async fn runtime_routes_keep_user_script_inventory_shape() {
 }
 
 #[tokio::test]
-async fn runtime_status_devtools_repair_routes_are_dispatched() {
+async fn runtime_status_devtools_repair_and_ads_routes_are_dispatched() {
     let runtime = Arc::new(FakeRuntime::default());
     let ctx = BridgeContext::new(
         Arc::new(FakeSettings::default()),
@@ -501,6 +501,10 @@ async fn runtime_status_devtools_repair_routes_are_dispatched() {
     assert_eq!(
         handle_bridge_request(ctx.clone(), "/backend/status", json!({})).await,
         json!({"status": "ok", "message": "后端已连接", "version": codex_plus_core::version::VERSION, "hideOfficialUsageAlert": false})
+    );
+    assert_eq!(
+        handle_bridge_request(ctx.clone(), "/ads", json!({})).await,
+        json!({"version": 1, "ads": [{"id": "runtime-ad"}]})
     );
     assert_eq!(
         handle_bridge_request(ctx.clone(), "/zed-remote/status", json!({})).await,
@@ -784,6 +788,60 @@ async fn user_script_inventory_merges_renderer_runtime_status() {
     assert_eq!(failed["error"], "boom");
 }
 
+#[tokio::test]
+async fn user_script_manager_deletes_market_script_metadata_and_rejects_builtin_delete() {
+    let temp = tempfile::tempdir().unwrap();
+    let builtin_dir = temp.path().join("builtin");
+    let user_dir = temp.path().join("user");
+    std::fs::create_dir_all(&builtin_dir).unwrap();
+    std::fs::write(builtin_dir.join("demo.js"), "window.demo = true;").unwrap();
+    std::fs::create_dir_all(&user_dir).unwrap();
+    let manager = UserScriptManager::new(
+        builtin_dir,
+        user_dir.clone(),
+        temp.path().join("user_scripts.json"),
+    );
+    let script = codex_plus_core::script_market::MarketScript {
+        id: "demo".to_string(),
+        name: "Demo".to_string(),
+        description: String::new(),
+        version: "1.0.0".to_string(),
+        author: String::new(),
+        tags: Vec::new(),
+        homepage: "https://example.com/demo".to_string(),
+        script_url: "https://example.com/demo.js".to_string(),
+        sha256: String::new(),
+    };
+
+    codex_plus_core::script_market::install_market_script_content(
+        &manager,
+        &script,
+        b"window.demo = true;",
+    )
+    .unwrap();
+    manager
+        .set_script_enabled("user:market-demo.js", false)
+        .unwrap();
+
+    let error = manager.delete_user_script("builtin:demo.js").unwrap_err();
+    assert!(error.to_string().contains("only user scripts"));
+    manager.delete_user_script("user:market-demo.js").unwrap();
+
+    assert!(!user_dir.join("market-demo.js").exists());
+    assert!(
+        manager.inventory().unwrap()["scripts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|script| script["market_id"] != "demo")
+    );
+    let saved = serde_json::from_str::<Value>(
+        &std::fs::read_to_string(temp.path().join("user_scripts.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(saved.get("market").is_none());
+    assert_eq!(saved["scripts"], json!({}));
+}
 
 #[tokio::test]
 async fn core_runtime_reload_evaluates_enabled_user_bundle_and_status_is_ok() {
@@ -914,6 +972,145 @@ fn user_script_manager_tolerates_bad_config_fields_and_updates_atomically() {
     assert_eq!(saved["scripts"]["user:c.js"], false);
 }
 
+#[test]
+fn script_market_manifest_filters_invalid_entries() {
+    let raw = serde_json::json!({
+        "version": 1,
+        "updated_at": "2026-05-21T00:00:00Z",
+        "scripts": [
+            {
+                "id": "demo",
+                "name": "Demo",
+                "description": "Useful demo",
+                "version": "1.0.0",
+                "author": "BigPizzaV3",
+                "tags": ["ui", 42],
+                "homepage": "https://example.com/demo",
+                "script_url": "https://example.com/demo.js",
+                "sha256": ""
+            },
+            { "id": "", "name": "Bad", "version": "1", "script_url": "https://example.com/bad.js" },
+            { "id": "missing-url", "name": "Bad", "version": "1" }
+        ]
+    });
+
+    let manifest = codex_plus_core::script_market::parse_market_manifest(raw).unwrap();
+
+    assert_eq!(manifest.version, 1);
+    assert_eq!(manifest.updated_at.as_deref(), Some("2026-05-21T00:00:00Z"));
+    assert_eq!(manifest.scripts.len(), 1);
+    assert_eq!(manifest.scripts[0].id, "demo");
+    assert_eq!(manifest.scripts[0].tags, vec!["ui"]);
+}
+
+#[test]
+fn user_script_inventory_includes_market_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_dir = temp.path().join("user");
+    std::fs::create_dir_all(&user_dir).unwrap();
+    std::fs::write(user_dir.join("market-demo.js"), "window.demo = true;").unwrap();
+    let manager = UserScriptManager::new(
+        temp.path().join("builtin"),
+        user_dir,
+        temp.path().join("user_scripts.json"),
+    );
+
+    manager
+        .record_market_install(&codex_plus_core::script_market::MarketScript {
+            id: "demo".to_string(),
+            name: "Demo".to_string(),
+            description: "Useful demo".to_string(),
+            version: "1.0.0".to_string(),
+            author: "BigPizzaV3".to_string(),
+            tags: vec!["ui".to_string()],
+            homepage: "https://example.com/demo".to_string(),
+            script_url: "https://example.com/demo.js".to_string(),
+            sha256: String::new(),
+        })
+        .unwrap();
+
+    let inventory = manager.inventory().unwrap();
+
+    assert_eq!(inventory["scripts"][0]["key"], "user:market-demo.js");
+    assert_eq!(inventory["scripts"][0]["market_id"], "demo");
+    assert_eq!(inventory["scripts"][0]["version"], "1.0.0");
+    assert_eq!(inventory["scripts"][0]["installed"], true);
+    assert_eq!(
+        inventory["scripts"][0]["source_url"],
+        "https://example.com/demo.js"
+    );
+    assert_eq!(
+        inventory["scripts"][0]["homepage"],
+        "https://example.com/demo"
+    );
+}
+
+#[test]
+fn install_market_script_writes_file_and_records_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = UserScriptManager::new(
+        temp.path().join("builtin"),
+        temp.path().join("user"),
+        temp.path().join("user_scripts.json"),
+    );
+    let script = codex_plus_core::script_market::MarketScript {
+        id: "demo".to_string(),
+        name: "Demo".to_string(),
+        description: String::new(),
+        version: "1.0.0".to_string(),
+        author: String::new(),
+        tags: Vec::new(),
+        homepage: "https://example.com/demo".to_string(),
+        script_url: "https://example.com/demo.js".to_string(),
+        sha256: String::new(),
+    };
+
+    codex_plus_core::script_market::install_market_script_content(
+        &manager,
+        &script,
+        b"window.demo = true;",
+    )
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("user").join("market-demo.js")).unwrap(),
+        "window.demo = true;"
+    );
+    let inventory = manager.inventory().unwrap();
+    assert_eq!(inventory["scripts"][0]["market_id"], "demo");
+}
+
+#[test]
+fn install_market_script_ignores_checksum_mismatch_and_replaces_existing_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_dir = temp.path().join("user");
+    std::fs::create_dir_all(&user_dir).unwrap();
+    std::fs::write(user_dir.join("market-demo.js"), "old").unwrap();
+    let manager = UserScriptManager::new(
+        temp.path().join("builtin"),
+        user_dir.clone(),
+        temp.path().join("user_scripts.json"),
+    );
+    let script = codex_plus_core::script_market::MarketScript {
+        id: "demo".to_string(),
+        name: "Demo".to_string(),
+        description: String::new(),
+        version: "1.0.0".to_string(),
+        author: String::new(),
+        tags: Vec::new(),
+        homepage: String::new(),
+        script_url: "https://example.com/demo.js".to_string(),
+        sha256: "0000".to_string(),
+    };
+
+    codex_plus_core::script_market::install_market_script_content(&manager, &script, b"new")
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(user_dir.join("market-demo.js")).unwrap(),
+        "new"
+    );
+}
 
 #[tokio::test]
 async fn launch_lifecycle_uses_hook_supplied_bridge_context_for_injection() {
@@ -1105,6 +1302,10 @@ impl BridgeRuntimeService for FakeRuntime {
             "models": ["qwen3-coder"],
             "sources": []
         }))
+    }
+
+    async fn ads(&self) -> anyhow::Result<Value> {
+        Ok(json!({"version": 1, "ads": [{"id": "runtime-ad"}]}))
     }
 
     async fn zed_remote_status(&self) -> anyhow::Result<Value> {

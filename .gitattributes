@@ -11,3 +11,8 @@
 assets/inject/*.js text eol=lf
 assets/inject/**/*.js text eol=lf
 assets/native-browser/*.mjs text eol=lf
+
+# Keep every byte-exact upstream theme asset stable on all checkout platforms.
+assets/inject/upstream/**/*.js text eol=lf
+assets/inject/upstream/**/*.css text eol=lf
+assets/inject/upstream/skin-packs/packs/*/theme.json text eol=lf

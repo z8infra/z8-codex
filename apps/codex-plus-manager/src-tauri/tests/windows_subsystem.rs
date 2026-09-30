@@ -342,6 +342,21 @@ fn provider_import_commands_return_metadata_only() {
         "pending: pending.as_ref().map(pending_provider_import_summary)"
     ));
     assert!(commands_rs.contains("pub has_api_key: bool"));
+    assert!(commands_rs.contains(
+        "pub fn reset_dream_skin_theme() -> CommandResult<SettingsMutationPayload>"
+    ));
+    assert!(commands_rs.contains(
+        "pub async fn refresh_user_script_inventory() -> CommandResult<SettingsMutationPayload>"
+    ));
+    assert!(commands_rs.contains(
+        "pub fn set_user_script_enabled(key: String, enabled: bool) -> CommandResult<SettingsMutationPayload>"
+    ));
+    assert!(commands_rs.contains(
+        "pub fn delete_user_script(key: String) -> CommandResult<SettingsMutationPayload>"
+    ));
+    assert!(app_tsx.contains("call<SettingsMutationResult>(\"refresh_user_script_inventory\")"));
+    assert!(app_tsx.contains("call<SettingsMutationResult>(\"set_user_script_enabled\""));
+    assert!(app_tsx.contains("call<SettingsMutationResult>(\"delete_user_script\""));
     assert!(!commands_rs.contains("pub providers: Vec<codex_plus_core::ccs_import::CcsProviderImport>"));
     assert!(!commands_rs.contains(
         "pub pending: Option<codex_plus_core::provider_import::ProviderImportRequest>"
