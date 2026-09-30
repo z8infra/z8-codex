@@ -440,6 +440,10 @@ pub fn launch_installer(path: &Path) -> anyhow::Result<()> {
     {
         use std::os::windows::process::CommandExt;
         std::process::Command::new(path)
+            // The NSIS package only closes Z8-owned processes when it was
+            // launched by this update flow. A manually opened installer keeps
+            // the safer fail-closed behavior for ordinary installs.
+            .arg("/Z8Update")
             .creation_flags(crate::windows_integration::CREATE_NO_WINDOW)
             .spawn()
             .map(|_| ())
