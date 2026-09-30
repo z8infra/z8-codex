@@ -511,6 +511,7 @@ fn manager_update_install_keeps_visible_progress_bar() {
     assert!(app_tsx.contains("下载并运行安装包"));
     assert!(app_tsx.contains("updateInstallProgress"));
     assert!(app_tsx.contains("安装包更新进度"));
+    assert!(app_tsx.contains("progress.active || progress.percent > 0"));
     assert!(app_tsx.contains("completedTitle={t(\"上次更新结果\")}"));
     assert!(app_tsx.contains("progress={updateInstallProgress}"));
     assert!(app_tsx.contains("z8-codex.update.last-check-date"));
