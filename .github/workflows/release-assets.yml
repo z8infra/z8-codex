@@ -372,7 +372,9 @@ jobs:
           }
           const payload = {
             version: `v${version}`,
-            url: release.url || `https://github.com/${repo}/releases/tag/${tag}`,
+            // Draft releases expose an untagged URL; the public tag URL is
+            // stable and remains valid after the final draft-to-public edit.
+            url: `https://github.com/${repo}/releases/tag/${tag}`,
             body: release.body || "",
             assets
           };
