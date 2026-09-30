@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   accountFailureMessage,
+  shouldResetCaptchaAfterFailure,
   authSettingsRequireCaptcha,
   canSubmitAuth,
   isSuccessfulAccountCommand,
@@ -130,6 +131,14 @@ test("account failures keep the existing account and explain unavailable steps",
     "账户操作未完成，请重试。 错误代码：account_backend_admin_only",
   );
   assert.equal(accountFailureMessage("server detail [credential removed]"), "账户操作未完成，请重试。");
+});
+
+test("captcha only resets for challenge failures, not invalid credentials", () => {
+  assert.equal(shouldResetCaptchaAfterFailure("account_invalid_credentials: invalid"), false);
+  assert.equal(shouldResetCaptchaAfterFailure("account_request_invalid: invalid"), false);
+  assert.equal(shouldResetCaptchaAfterFailure("account_captcha_failed: rejected"), true);
+  assert.equal(shouldResetCaptchaAfterFailure("account_captcha_unavailable: unavailable"), true);
+  assert.equal(shouldResetCaptchaAfterFailure("account_security_challenge: blocked"), true);
 });
 
 test("auth settings select one complete captcha provider", () => {

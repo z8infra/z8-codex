@@ -1022,7 +1022,7 @@ const SETTINGS_STEPWISE_SECTION_ID = "settings-stepwise";
  * 新增页面时**必须**想清楚归属：默认可见会让 Codex 专属功能暴露在错误的工具上下文。
  */
 const routes: Array<{ id: Route; label: string; icon: LucideIcon; badge?: string; tool?: string; feature?: Z8Feature }> = [
-  // 概览是 Z8 Codex 的默认入口，承载置顶推荐位和当前状态。
+  // Z8 账户是默认入口；概览承载置顶推荐位和当前状态。
   { id: "overview", label: t("概览"), icon: LayoutDashboard },
   { id: "account", label: t("Z8 账户"), icon: ShieldCheck, tool: "codex" },
   { id: "relay", label: t("供应商配置"), icon: KeyRound, tool: "codex" },
@@ -1043,7 +1043,7 @@ const routes: Array<{ id: Route; label: string; icon: LucideIcon; badge?: string
 const navigationSections: Array<{ label: string; routes: Route[]; placement?: "bottom" }> = [
   {
     label: t("工作区"),
-    routes: ["overview", "account", "relay", "sessions", "context"],
+    routes: ["account", "overview", "relay", "sessions", "context"],
   },
   {
     label: t("扩展"),
@@ -12204,11 +12204,12 @@ function loadInitialTheme(): Theme {
 }
 
 function loadInitialRoute(): Route {
-  if (typeof window === "undefined") return "overview";
+  if (typeof window === "undefined") return "account";
   const params = new URLSearchParams(window.location.search);
   if (params.get("showUpdate") === "1") {
     return "about";
   }
   const requestedRoute = window.location.hash.replace(/^#/, "");
+  if (!requestedRoute) return "account";
   return resolveZ8DeepLink(requestedRoute);
 }
