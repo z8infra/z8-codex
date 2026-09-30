@@ -9937,7 +9937,13 @@ function UpdateDialog({
             </section>
           )) : <p className="update-release-empty">{t("此版本没有附加更新说明。")}</p>}
         </div>
-        {progress.active ? <TaskProgressBox progress={progress} title={t("安装包更新进度")} /> : null}
+        {progress.active ? (
+          <TaskProgressBox
+            completedTitle={t("上次更新结果")}
+            progress={progress}
+            title={t("安装包更新进度")}
+          />
+        ) : null}
         {!update.assetUrl ? <p className="field-hint">{t("当前平台没有匹配的安装包，请前往 Release 页面查看。")}</p> : null}
         <Toolbar className="update-modal-actions">
           <Button disabled={installing} onClick={onClose} variant="secondary">{t("取消")}</Button>
