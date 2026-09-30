@@ -236,7 +236,7 @@ fn windows_update_mode_closes_z8_processes_before_install_preflight() {
     assert!(install.contains("${If} $Z8_UPDATE_MODE == \"1\""));
     assert!(install.contains("Call z8_update_close_processes"));
     assert!(install.contains("z8_install_preflight:"));
-    assert!(install.contains("IntOp $Z8_INSTALL_RETRY_COUNT $+ 1"));
+    assert!(install.contains("IntOp $Z8_INSTALL_RETRY_COUNT $Z8_INSTALL_RETRY_COUNT + 1"));
     assert!(install.contains("MB_RETRYCANCEL"));
     assert!(install.contains("z8_install_retry:"));
     assert!(install.find("Call z8_update_close_processes").unwrap()
@@ -245,7 +245,7 @@ fn windows_update_mode_closes_z8_processes_before_install_preflight() {
 }
 
 #[test]
-fn windows_release_and_pr_build_package_native_x64_and_arm64_wrappers() {
+fn windows_release_and_pr_build_package_native_x64_wrappers() {
     let release = read_repo(".github/workflows/release-assets.yml");
     for required in [
         "runner: windows-latest",
@@ -267,8 +267,6 @@ fn windows_release_and_pr_build_package_native_x64_and_arm64_wrappers() {
     for required in [
         "runner: windows-latest",
         "target: x86_64-pc-windows-msvc",
-        "runner: windows-11-arm",
-        "target: aarch64-pc-windows-msvc",
         "cargo build --release --locked --target ${{ matrix.target }}",
         "target/${{ matrix.target }}/release/codex-plus-plus.exe",
         "target/${{ matrix.target }}/release/codex-plus-plus-manager.exe",
@@ -279,6 +277,8 @@ fn windows_release_and_pr_build_package_native_x64_and_arm64_wrappers() {
     ] {
         assert!(pr.contains(required), "PR workflow must contain {required:?}");
     }
+    assert!(!pr.contains("runner: windows-11-arm"));
+    assert!(!pr.contains("target: aarch64-pc-windows-msvc"));
 
     assert!(release.contains("Z8Codex-$version-windows-${{ matrix.arch }}.zip"));
     assert!(release.contains("dist/windows/*.exe"));
