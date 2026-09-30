@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-1.3.5}"
+VERSION="${1:-1.3.8}"
 ARCH="${2:-$(uname -m)}"
 if [ "$ARCH" = "x86_64" ]; then
   ARCH="x64"

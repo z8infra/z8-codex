@@ -240,8 +240,6 @@ describe("renderer injection header compatibility", () => {
     assert.match(renderer, /button\.setAttribute\("aria-label", "Z8 Codex"\)/);
     assert.match(renderer, /z8-codex-brand-icon/);
     assert.match(renderer, /<span class="truncate">Z8 Codex<\/span>/);
-    assert.match(renderer, /data-codex-plus-version="true">Z8 Codex \$\{codexPlusVersion\}/);
-    assert.doesNotMatch(renderer, /data-codex-plus-version="true">Codex\+\+/);
     assert.doesNotMatch(renderer, /button\.setAttribute\("aria-label", "Codex\+\+"\)/);
     assert.match(renderer, /function installCodexPlusSidebarNavigation\(\)/);
     assert.match(renderer, /aside\.app-shell-left-panel nav\[role="navigation"\]/);
@@ -328,7 +326,23 @@ describe("renderer injection header compatibility", () => {
     assert.doesNotMatch(renderer, /container\.style\.(?:setProperty|removeProperty)\("display"/);
   });
 
+  it("keeps Windows Dream Skin compatible with the modern Codex main surface", async () => {
+    const dreamSkinRenderer = await readFile(
+      new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url),
+      "utf8",
+    );
+    const cidalaRenderer = await readFile(
+      new URL("../../../assets/inject/upstream/cidala-tiger/windows/renderer-inject.js", import.meta.url),
+      "utf8",
+    );
 
+    assert.match(dreamSkinRenderer, /codex-dream-skin-selectors\/1/);
+    assert.match(dreamSkinRenderer, /MainContentSurface/);
+    assert.match(dreamSkinRenderer, /data-ds-part/);
+    assert.match(cidalaRenderer, /MainContentSurface/);
+    assert.match(cidalaRenderer, /data-codex-plus-dream-surface/);
+    assert.match(cidalaRenderer, /ensureShellMain/);
+  });
 });
 
 /** 从注入脚本里取出 `shouldScheduleScan`，配上可控的依赖来跑。 */

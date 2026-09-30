@@ -17,10 +17,18 @@ export const Z8_BRAND = {
 } as const;
 
 export const Z8_FEATURES = {
-  /** Z8 发行版从 GitHub Release 获取匹配平台的安装包更新。 */
+  /** Z8 发行版从 GitHub Release 的 Z8Codex 资产检查并安装更新。 */
   onlineUpdates: true,
+  /** 首页不展示上游广告或赞助商卡片。 */
+  sponsorBoard: false,
+  /** 不展示上游推荐内容页面。 */
+  recommendations: false,
+  /** 第一版不开放第三方 Dream Skin/皮肤市场。 */
+  dreamSkin: false,
   /** 第一版不开放 Zed Remote 项目入口。 */
   zedRemote: false,
+  /** 第一版不开放脚本市场入口。 */
+  userScripts: false,
 } as const;
 
 export type Z8Feature = keyof typeof Z8_FEATURES;
@@ -32,7 +40,9 @@ export type Z8Feature = keyof typeof Z8_FEATURES;
  */
 export const Z8_DISABLED_ROUTES = [
   "grok",
+  "dreamSkin",
   "zedRemote",
+  "userScripts",
   "recommendations",
 ] as const;
 

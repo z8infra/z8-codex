@@ -19,9 +19,13 @@ test("Z8 brand config exposes a stable product identity", () => {
   assert.equal(Z8_BRAND.mark, "Z8");
 });
 
-test("Z8 feature gates keep online updates enabled and upstream-only routes disabled", () => {
+test("upstream-only navigation stays disabled for the Z8 release", () => {
+  assert.equal(Z8_FEATURES.sponsorBoard, false);
   assert.equal(Z8_FEATURES.onlineUpdates, true);
+  assert.equal(Z8_FEATURES.recommendations, false);
+  assert.equal(Z8_FEATURES.dreamSkin, false);
   assert.equal(Z8_FEATURES.zedRemote, false);
+  assert.equal(Z8_FEATURES.userScripts, false);
 });
 
 test("disabled upstream routes stay closed even when opened as a deep link", () => {
@@ -31,6 +35,7 @@ test("disabled upstream routes stay closed even when opened as a deep link", () 
     assert.equal(isZ8RouteDisabled(route), true);
     assert.equal(resolveZ8DeepLink(route), "overview");
   }
+  assert.equal(isZ8FeatureEnabled("recommendations"), false);
   assert.equal(isZ8FeatureEnabled(), true);
   assert.equal(resolveZ8DeepLink("about"), "about");
   assert.equal(resolveZ8DeepLink("unknown-upstream-page"), "overview");

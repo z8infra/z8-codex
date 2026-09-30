@@ -14,7 +14,9 @@ const TRAY_ID: &str = "codex_plus_tray";
 
 static APP_EXITING: AtomicBool = AtomicBool::new(false);
 const TRAY_MENU_SHOW: &str = "tray_show_main";
+const TRAY_MENU_DREAM_SKIN_APPLY: &str = "tray_apply_dream_skin";
 const TRAY_MENU_QUIT: &str = "tray_quit_app";
+const DREAM_SKIN_DEBUG_PORT: u16 = 9229;
 const MANAGER_NAVIGATION_EVENT: &str = "manager-navigation-requested";
 
 pub fn run() {
@@ -28,6 +30,19 @@ pub fn run() {
     let Some(_guard) = acquire_single_instance_guard() else {
         return;
     };
+    if let Ok(settings) = codex_plus_core::settings::SettingsStore::default().load()
+        && let Err(error) = codex_plus_core::dream_skin::sync_default_dream_skin_base_theme(
+            settings.enhancements_enabled
+                && settings.codex_app_dream_skin_enabled
+                && !settings.codex_app_dream_skin_paused,
+            &settings.codex_app_dream_skin_theme_config,
+        )
+    {
+        let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
+            "manager.dream_skin_base_theme_sync_failed",
+            serde_json::json!({ "message": error.to_string() }),
+        );
+    }
     let show_update = commands::startup_should_show_update();
     let app_result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -77,6 +92,28 @@ pub fn run() {
             commands::weixin_connect_start,
             commands::weixin_connect_stop,
             commands::find_desktop_codex_cli,
+            commands::dream_skin_status,
+            commands::import_dream_skin_image,
+            commands::reset_dream_skin_image,
+            commands::reset_dream_skin_theme,
+            commands::apply_dream_skin,
+            commands::restore_dream_skin,
+            commands::verify_dream_skin,
+            commands::list_dream_skin_themes,
+            commands::refresh_dream_skin_market,
+            commands::refresh_dream_skin_community,
+            commands::load_pending_dream_skin_community,
+            commands::confirm_pending_dream_skin_community,
+            commands::dismiss_pending_dream_skin_community,
+            commands::install_dream_skin_market_theme,
+            commands::install_dream_skin_community_theme,
+            commands::import_dream_skin_theme_package,
+            commands::load_dream_skin_theme,
+            commands::create_dream_skin_theme,
+            commands::save_dream_skin_theme,
+            commands::rename_dream_skin_theme,
+            commands::delete_dream_skin_theme,
+            commands::activate_dream_skin_theme,
             commands::load_ccs_providers,
             commands::import_ccs_providers,
             commands::load_pending_provider_import,
@@ -94,6 +131,12 @@ pub fn run() {
             commands::preview_session_index_cleanup,
             commands::apply_session_index_cleanup,
             commands::sync_providers_now,
+            commands::load_ads,
+            commands::refresh_script_market,
+            commands::refresh_user_script_inventory,
+            commands::install_market_script,
+            commands::set_user_script_enabled,
+            commands::delete_user_script,
             commands::refresh_skill_catalog,
             commands::list_installed_skills,
             commands::install_skill,
@@ -176,7 +219,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = event {
                 for url in urls {
-                    if handle_session_share_url(url.as_str())
+                    if handle_session_share_url(url.as_str()) || handle_dream_skin_url(url.as_str())
                     {
                         show_main_window(app_handle);
                     }
@@ -190,6 +233,28 @@ pub fn run() {
                     "error": error.to_string()
                 }),
             );
+        }
+    }
+}
+
+pub fn handle_dream_skin_url(url: &str) -> bool {
+    if !url.starts_with("dreamskin://") {
+        return false;
+    }
+    match codex_plus_core::dream_skin_community::save_pending_community_link(url) {
+        Ok(version_id) => {
+            let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
+                "manager.dream_skin_link.pending",
+                serde_json::json!({ "versionId": version_id }),
+            );
+            true
+        }
+        Err(error) => {
+            let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(
+                "manager.dream_skin_link.failed",
+                serde_json::json!({ "error": error.to_string() }),
+            );
+            false
         }
     }
 }
@@ -227,6 +292,11 @@ fn install_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             TRAY_MENU_SHOW => {
                 show_main_window(app);
+            }
+            TRAY_MENU_DREAM_SKIN_APPLY => {
+                tauri::async_runtime::spawn(async {
+                    record_tray_dream_skin_result("apply", apply_dream_skin_from_tray().await);
+                });
             }
             TRAY_MENU_QUIT => {
                 APP_EXITING.store(true, Ordering::SeqCst);
@@ -356,6 +426,43 @@ fn update_tray_labels<R: tauri::Runtime>(
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title(&window_title);
     }
+}
+
+async fn apply_dream_skin_from_tray() -> anyhow::Result<()> {
+    let store = codex_plus_core::settings::SettingsStore::default();
+    let current = store.load()?;
+    if !current.enhancements_enabled {
+        anyhow::bail!("Codex enhancements are disabled");
+    }
+    let settings = store.update(serde_json::json!({
+        "codexAppDreamSkinEnabled": true,
+        "codexAppDreamSkinPaused": false
+    }))?;
+    debug_assert!(settings.enhancements_enabled);
+    codex_plus_core::dream_skin::sync_default_dream_skin_base_theme(
+        true,
+        &settings.codex_app_dream_skin_theme_config,
+    )?;
+    codex_plus_core::dream_skin_runtime::apply_dream_skin_live(
+        DREAM_SKIN_DEBUG_PORT,
+        codex_plus_core::protocol_proxy::protocol_proxy_port(),
+    )
+    .await?;
+    Ok(())
+}
+
+fn record_tray_dream_skin_result(action: &str, result: anyhow::Result<()>) {
+    let (event, detail) = match result {
+        Ok(()) => (
+            "manager.tray_dream_skin_ok",
+            serde_json::json!({ "action": action }),
+        ),
+        Err(error) => (
+            "manager.tray_dream_skin_failed",
+            serde_json::json!({ "action": action, "error": error.to_string() }),
+        ),
+    };
+    let _ = codex_plus_core::diagnostic_log::append_diagnostic_log(event, detail);
 }
 
 fn show_main_window<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) {

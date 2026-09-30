@@ -8,7 +8,6 @@ Z8 Codex 是面向 Codex 官方桌面端的账户、供应商与启动管理工�
 
 <p align="center">
   <a href="https://z8.hk/">Z8 官网</a> ·
-  <a href="https://github.com/z8infra/z8-codex">项目仓库</a> ·
   <a href="https://github.com/BigPizzaV3/CodexPlusPlus">上游项目</a> ·
   <a href="LICENSE">AGPL-3.0-only</a>
 </p>
@@ -61,11 +60,12 @@ Z8 Codex 需要本机已经安装官方 Codex 桌面端才能启动会话。首�
 
 ### 安装 Z8 Codex
 
-发布包按系统和处理器架构提供：
+内部测试包按系统和处理器架构提供：
 
-- Windows x64：安装程序 `Z8Codex-*-windows-x64-setup.exe` 和 ZIP
-- macOS Intel：DMG 和 ZIP（`Z8Codex-*-macos-x64.*`）
-- macOS Apple Silicon：DMG 和 ZIP（`Z8Codex-*-macos-arm64.*`）
+- Windows x64：`Z8Codex-*-windows-x64-setup.exe`
+- Windows ARM64：`Z8Codex-*-windows-arm64-setup.exe`
+- macOS Intel：`Z8Codex-*-macos-x64.dmg`
+- macOS Apple Silicon：`Z8Codex-*-macos-arm64.dmg`
 
 安装后打开“Z8 Codex 管理工具”，按以下顺序完成设置：
 
@@ -118,29 +118,10 @@ npm ci --prefix apps/codex-plus-manager
 npm run vite:build --prefix apps/codex-plus-manager
 cargo build --release --locked --target x86_64-apple-darwin
 MACOS_BUILD_NUMBER=local BINARY_DIR="$PWD/target/x86_64-apple-darwin/release" \
-  bash scripts/installer/macos/package-dmg.sh 1.3.2 x64
+  bash scripts/installer/macos/package-dmg.sh 1.3.8 x64
 ```
 
 Apple Silicon 使用 `aarch64-apple-darwin` 和 `arm64` 参数。内部测试包使用临时签名，不代表 Developer ID 签名或公证发布包。
-
-### 自动发版
-
-GitHub Actions 会在推送严格的版本标签（例如 `v1.3.3`）后自动创建 GitHub Release，并发布六个下载包：Windows x64 的安装程序和 ZIP、macOS Intel 的 DMG 和 ZIP、macOS Apple Silicon 的 DMG 和 ZIP，同时上传 `latest.json`。GitHub 会自动提供对应提交的 Source code ZIP 和 tar.gz。
-
-发版前请把以下三个版本号同步为同一个 `X.Y.Z`：
-
-- 根目录 `Cargo.toml` 的 workspace version
-- `apps/codex-plus-manager/package.json` 的 version
-- `apps/codex-plus-manager/src-tauri/tauri.conf.json` 的 version
-
-然后提交并推送代码，再推送版本标签：
-
-```bash
-git tag v1.3.3
-git push origin v1.3.3
-```
-
-工作流会校验标签和三个版本号；版本不一致时会停止，不会发布不匹配的安装包。Windows 安装包目前未配置代码签名，macOS 安装包需要后续配置 Apple Developer ID 签名和公证凭据后才能作为正式签名版本分发。
 
 ## 常见问题
 
