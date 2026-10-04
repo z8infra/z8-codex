@@ -203,7 +203,6 @@ fn info_plist(display_name: &str, executable_name: &str, identifier_suffix: &str
       <key>CFBundleURLSchemes</key>
       <array>
         <string>codexplusplus</string>
-        <string>dreamskin</string>
       </array>
     </dict>
   </array>

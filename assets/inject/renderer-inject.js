@@ -2,7 +2,12 @@
   // The launcher targets the Codex app page, but keep a renderer-side guard
   // so this bundle cannot create UI in embedded browser documents.
   const codexPlusIsNodeTestHarness = typeof process === "object" && !!process.versions?.node;
-  if (!codexPlusIsNodeTestHarness && (window.top !== window || window.self !== window || !window.electronBridge || !/^app:\/\/\-\//i.test(window.location.href))) return;
+  // The preload bridge is installed after document-start scripts. Requiring
+  // it here makes the new-document copy exit before the bridge exists, so a
+  // reload loses the Codex UI patch while native-menu localization still runs.
+  // The top-level app:// guard is sufficient; bridge-dependent work waits for
+  // the bridge at the call site below.
+  if (!codexPlusIsNodeTestHarness && (window.top !== window || window.self !== window || !/^app:\/\/\-\//i.test(window.location.href))) return;
   const codexPlusIsWindowsPlatform = /\bWindows\b/i.test(navigator.userAgent || "");
 
   function installCodexPlusFastStartup() {
@@ -107,6 +112,13 @@
     const languages = [locale, "zh", "en-US", "en"];
     const managedLocaleStorageKey = "codexPlus.forceChineseLocale.managed.v1";
     const localeReloadStorageKey = "codexPlus.forceChineseLocale.reload.v1";
+    const i18nReloadStorageKey = "codexPlus.forceChineseLocale.i18nReload.v1";
+    // Bump this marker whenever the boot-time i18n patch changes. A previous
+    // failed patch must not suppress the one guarded reload needed to apply a
+    // corrected patch on an already-used profile.
+    const i18nPatchVersion = "4";
+    const patchedStatsigClients = new WeakSet();
+    const patchedStatsigRoots = new WeakMap();
 
     const readManagedLocale = () => {
       try {
@@ -191,7 +203,10 @@
       try {
         if (window.sessionStorage.getItem(localeReloadStorageKey) === marker) return;
         window.sessionStorage.setItem(localeReloadStorageKey, marker);
+        // 标记写不进去就不要刷新，否则下次加载读不到标记，会再次刷新。
+        if (window.sessionStorage.getItem(localeReloadStorageKey) !== marker) return;
       } catch {
+        return;
       }
       window.location.reload();
     };
@@ -201,6 +216,20 @@
         window.sessionStorage.removeItem(localeReloadStorageKey);
       } catch {
       }
+    };
+
+    const reloadAfterI18nPatch = () => {
+      const marker = JSON.stringify({ locale, version: i18nPatchVersion });
+      try {
+        if (window.sessionStorage.getItem(i18nReloadStorageKey) === marker) return;
+        window.sessionStorage.setItem(i18nReloadStorageKey, marker);
+      } catch {
+        return;
+      }
+      // The initial page may already have rendered its English fallback. A
+      // single guarded reload makes the patched config take effect from the
+      // app's first render without creating a reload loop.
+      window.setTimeout(() => window.location.reload(), 0);
     };
 
     const syncOfficialLocaleSetting = async () => {
@@ -261,6 +290,18 @@
     defineNavigatorGetter("language", locale);
     defineNavigatorGetter("languages", languages);
 
+    const emitStatsigValuesUpdated = (client) => {
+      try {
+        if (typeof client?.$emt === "function") client.$emt({ name: "values_updated" });
+      } catch {
+      }
+    };
+
+    const noteI18nConfigPatched = () => {
+      window.__codexPlusForceChineseLocaleI18nPatched = true;
+      reloadAfterI18nPatch();
+    };
+
     const patchI18nConfig = (dynamicConfig) => {
       if (!dynamicConfig || typeof dynamicConfig !== "object") return dynamicConfig;
       const value = dynamicConfig.value && typeof dynamicConfig.value === "object" ? dynamicConfig.value : {};
@@ -269,18 +310,35 @@
         enable_i18n: true,
         locale_source: "SYSTEM",
       };
+      const originalGet = typeof dynamicConfig.get === "function"
+        ? dynamicConfig.get.bind(dynamicConfig)
+        : null;
+      const patchedGet = (key, fallback) => {
+        if (key === "enable_i18n") return true;
+        if (key === "locale_source") return "SYSTEM";
+        return originalGet ? originalGet(key, fallback) : nextValue[key] ?? fallback;
+      };
       try {
         dynamicConfig.value = nextValue;
       } catch {
+        return { ...dynamicConfig, value: nextValue, get: patchedGet };
       }
-      if (typeof dynamicConfig.get === "function" && !dynamicConfig.__codexPlusForceChineseLocaleGetPatched) {
-        const originalGet = dynamicConfig.get.bind(dynamicConfig);
-        dynamicConfig.get = (key, fallback) => {
-          if (key === "enable_i18n") return true;
-          if (key === "locale_source") return "SYSTEM";
-          return originalGet(key, fallback);
-        };
-        dynamicConfig.__codexPlusForceChineseLocaleGetPatched = true;
+      if (originalGet && !dynamicConfig.__codexPlusForceChineseLocaleGetPatched) {
+        try {
+          dynamicConfig.get = patchedGet;
+          dynamicConfig.__codexPlusForceChineseLocaleGetPatched = true;
+        } catch {
+          try {
+            Object.defineProperty(dynamicConfig, "get", {
+              configurable: true,
+              writable: true,
+              value: patchedGet,
+            });
+            dynamicConfig.__codexPlusForceChineseLocaleGetPatched = true;
+          } catch {
+            return { ...dynamicConfig, value: nextValue, get: patchedGet };
+          }
+        }
       }
       return dynamicConfig;
     };
@@ -288,7 +346,11 @@
     const statsigClients = () => {
       const root = window.__STATSIG__ || globalThis.__STATSIG__;
       if (!root || typeof root !== "object") return [];
-      const clients = [root.firstInstance, typeof root.instance === "function" ? root.instance() : null];
+      const clients = [root.firstInstance];
+      try {
+        clients.push(typeof root.instance === "function" ? root.instance() : root.instance);
+      } catch {
+      }
       if (root.instances && typeof root.instances === "object") clients.push(...Object.values(root.instances));
       return clients.filter((client, index, array) => client && typeof client === "object" && array.indexOf(client) === index);
     };
@@ -296,43 +358,123 @@
     const patchStatsigClient = (client) => {
       if (!client || typeof client !== "object") return;
       if (typeof client.getDynamicConfig !== "function") return;
-      if (!client.__codexPlusForceChineseLocalePatched) {
+      if (!patchedStatsigClients.has(client)) {
         const originalGetDynamicConfig = client.getDynamicConfig.bind(client);
-        client.getDynamicConfig = (name, options) => {
+        const patchedGetDynamicConfig = (name, options) => {
           const result = originalGetDynamicConfig(name, options);
-          return name === "72216192" ? patchI18nConfig(result) : result;
+          return String(name) === "72216192" ? patchI18nConfig(result) : result;
         };
-        client.__codexPlusForceChineseLocalePatched = true;
+        try {
+          client.getDynamicConfig = patchedGetDynamicConfig;
+        } catch {
+        }
+        if (client.getDynamicConfig === patchedGetDynamicConfig) {
+          patchedStatsigClients.add(client);
+          try {
+            client.__codexPlusForceChineseLocalePatched = true;
+          } catch {
+          }
+          noteI18nConfigPatched();
+          emitStatsigValuesUpdated(client);
+        }
       }
       try {
         patchI18nConfig(client.getDynamicConfig("72216192", { disableExposureLog: true }));
+        if (!client.__codexPlusForceChineseLocaleValuesUpdated) {
+          client.__codexPlusForceChineseLocaleValuesUpdated = true;
+          emitStatsigValuesUpdated(client);
+        }
       } catch {
       }
     };
 
+    const wrapStatsigInstance = (instance) => {
+      if (typeof instance !== "function" || instance.__codexPlusForceChineseLocaleInstancePatched) return instance;
+      const wrapped = function codexPlusPatchedStatsigInstance(...args) {
+        const client = instance.apply(this, args);
+        patchStatsigClient(client);
+        return client;
+      };
+      try {
+        Object.defineProperty(wrapped, "__codexPlusForceChineseLocaleInstancePatched", {
+          configurable: false,
+          value: true,
+        });
+      } catch {
+      }
+      return wrapped;
+    };
+
     const patchStatsigRoot = (root) => {
-      if (!root || typeof root !== "object" || root.__codexPlusForceChineseLocaleRootPatched) return;
-      root.__codexPlusForceChineseLocaleRootPatched = true;
-      ["firstInstance", "instance"].forEach((key) => {
-        let current;
+      if (!root || typeof root !== "object") return;
+      let state = patchedStatsigRoots.get(root);
+      if (!state) {
+        state = { instanceWrapper: null, originalInstance: null, firstInstanceAccessorInstalled: false };
+        patchedStatsigRoots.set(root, state);
+      }
+
+      if (!state.firstInstanceAccessorInstalled) {
         try {
-          current = root[key];
-        } catch {
-          return;
-        }
-        patchStatsigClient(typeof current === "function" && key === "instance" ? current.call(root) : current);
-        try {
-          Object.defineProperty(root, key, {
+          let currentFirstInstance = root.firstInstance;
+          Object.defineProperty(root, "firstInstance", {
             configurable: true,
-            get: () => current,
+            enumerable: true,
+            get: () => currentFirstInstance,
             set: (next) => {
-              current = next;
-              patchStatsigClient(typeof next === "function" && key === "instance" ? next.call(root) : next);
+              currentFirstInstance = next;
+              patchStatsigClient(next);
             },
           });
+          state.firstInstanceAccessorInstalled = true;
         } catch {
         }
-      });
+      }
+
+      try {
+        patchStatsigClient(root.firstInstance);
+      } catch {
+      }
+
+      let currentInstance;
+      try {
+        currentInstance = root.instance;
+      } catch {
+        currentInstance = null;
+      }
+      if (typeof currentInstance === "function") {
+        if (!state.instanceWrapper || (currentInstance !== state.instanceWrapper && currentInstance !== state.originalInstance)) {
+          state.originalInstance = currentInstance;
+          state.instanceWrapper = wrapStatsigInstance(currentInstance);
+          try {
+            Object.defineProperty(root, "instance", {
+              configurable: true,
+              enumerable: true,
+              get: () => state.instanceWrapper,
+              set: (next) => {
+                state.originalInstance = next;
+                state.instanceWrapper = wrapStatsigInstance(next);
+                try {
+                  patchStatsigClient(typeof state.instanceWrapper === "function"
+                    ? state.instanceWrapper.call(root)
+                    : state.instanceWrapper);
+                } catch {
+                }
+              },
+            });
+          } catch {
+          }
+        }
+        try {
+          patchStatsigClient(state.instanceWrapper.call(root));
+        } catch {
+        }
+      } else {
+        patchStatsigClient(currentInstance);
+      }
+
+      if (root.instances && typeof root.instances === "object") {
+        Object.values(root.instances).forEach((client) => patchStatsigClient(client));
+      }
     };
 
     const installStatsigRootSetter = () => {
@@ -364,11 +506,20 @@
       });
     };
 
+    if (window.__CODEX_PLUS_TEST_FORCE_CHINESE_LOCALE__) {
+      window.__codexPlusForceChineseLocaleTest = {
+        patchI18nConfig,
+        patchStatsigClient,
+        patchStatsigRoot,
+        patchStatsigI18nConfig,
+      };
+    }
+
     patchStatsigI18nConfig();
     const startedAt = Date.now();
     const timer = window.setInterval(() => {
       patchStatsigI18nConfig();
-      if (Date.now() - startedAt > 5000) window.clearInterval(timer);
+      if (Date.now() - startedAt > 15000) window.clearInterval(timer);
     }, 50);
   }
 
@@ -388,8 +539,6 @@
   const conversationViewMaxAllowedWidth = 4000;
   const conversationViewDefaultWidth = 900;
   const conversationViewLegacyWidthKey = "codexPlus.threadCenter.maxWidth";
-  const zedRemoteButtonClass = "codex-zed-remote-button";
-  const zedRemoteOpenInMenuItemClass = "codex-zed-open-in-menu-item";
   const sessionCopyMenuItemClass = "codex-session-copy-menu-item";
   const sessionCopyMenuItemVersion = "1";
   const sessionCopyMenuActivationTimeoutMs = 12000;
@@ -399,15 +548,12 @@
   const codexPlusShareFallbackBaseUrl = "https://codexpp-share.pages.dev";
   const codexPlusShareMaxCharacters = 900000;
   const sessionAutoRenameTimeoutMs = 20000;
-  const zedRemoteToastClass = "codex-zed-remote-toast";
   const upstreamWorktreeDialogClass = "codex-upstream-worktree-dialog";
   const upstreamBranchOptionAttribute = "data-codex-upstream-branch-option";
   const upstreamBranchSelectionKey = "codexUpstreamBranchSelection";
   const upstreamProjectContextKey = "codexUpstreamProjectContext";
-  const zedRemoteOpenInMenuVersion = "1";
-  const zedRemoteOpenInMenuActivationWindowMs = 600;
   const styleId = "codex-delete-style";
-  const codexDeleteStyleVersion = "17";
+  const codexDeleteStyleVersion = "20";
   const codexPlusMenuId = "codex-plus-menu";
   const codexPlusMenuFloatingClass = "codex-plus-menu-floating";
   const codexPlusSidebarNavId = "codex-plus-sidebar-nav";
@@ -488,9 +634,6 @@
   const codexThreadScrollListenerVersion = "4";
   const codexThreadScrollUserIntentVersion = "dispatcher:2";
   const codexPlusImageOverlayId = "codex-plus-image-overlay";
-  const codexPlusDreamSkinStyleId = "codex-dream-skin-style";
-  const codexPlusDreamSkinPlatform = String(window.__CODEX_PLUS_DREAM_SKIN_PLATFORM__ || "macos");
-  const codexPlusDreamSkinRevision = String(window.__CODEX_PLUS_DREAM_SKIN_REVISION__ || "1");
   clearTimeout(window.__codexThreadScrollSaveTimer);
   window.__codexThreadScrollSaveTimer = null;
   (window.__codexThreadScrollRestoreTimers || []).forEach((timer) => clearTimeout(timer));
@@ -722,26 +865,6 @@
         background: var(--color-token-bg-secondary, var(--token-bg-fog, transparent));
         color: var(--color-token-text-primary, var(--token-text-primary, inherit));
       }
-      .${zedRemoteButtonClass} {
-        border: 1px solid var(--color-token-border-light, var(--token-border, rgba(0,0,0,.12)));
-        border-radius: var(--border-radius-sm, 6px);
-        background: var(--color-token-bg-secondary, var(--token-bg-fog, transparent));
-        color: var(--color-token-text-primary, var(--token-text-primary, inherit));
-        font: inherit;
-        font-size: 12px;
-        line-height: 16px;
-        margin-left: 6px;
-        padding: 2px 7px;
-        cursor: pointer;
-      }
-      .${zedRemoteButtonClass}:hover,
-      .${zedRemoteButtonClass}:focus-visible {
-        background: var(--color-token-interactive-bg-secondary-hover, var(--token-list-hover-background, rgba(0,0,0,.06)));
-        outline: none;
-      }
-      .${zedRemoteOpenInMenuItemClass} {
-        cursor: pointer;
-      }
       .${sessionCopyMenuItemClass} {
         cursor: pointer;
       }
@@ -769,31 +892,6 @@
       .${sessionShareButtonClass}[aria-busy="true"] {
         cursor: wait;
         opacity: .65;
-      }
-      .codex-zed-open-in-menu-icon {
-        width: 18px;
-        height: 18px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        object-fit: contain;
-      }
-      .${zedRemoteToastClass} {
-        position: fixed;
-        right: 18px;
-        bottom: 58px;
-        z-index: 2147483000;
-        max-width: min(420px, calc(100vw - 36px));
-        border: 1px solid var(--codex-plus-border);
-        border-radius: var(--border-radius-lg, 8px);
-        background: var(--codex-plus-bg-elevated);
-        color: var(--codex-plus-text);
-        font: inherit;
-        font-size: 13px;
-        line-height: 18px;
-        padding: 10px 12px;
-        box-shadow: var(--ui-menu-shadow, var(--shadow-300, 0 8px 24px rgba(0,0,0,.16)));
-        pointer-events: none;
       }
       [data-codex-delete-row="true"]:hover .${actionGroupClass} {
         opacity: 1;
@@ -831,7 +929,6 @@
         pointer-events: none;
         white-space: nowrap;
       }
-      [data-codex-plus-usage-alert-hidden="true"] { display: none !important; }
       .codex-archive-delete-all {
         border: 1px solid var(--color-border-danger, #dc2626);
         border-radius: var(--border-radius-sm, 6px);
@@ -1191,15 +1288,6 @@
       .codex-plus-backend-label { color: #a1a1aa; font-size: 12px; }
       .codex-plus-backend-label[data-status="ok"] { color: #34d399; }
       .codex-plus-backend-label[data-status="failed"] { color: #f87171; }
-      .codex-plus-user-script-warning { margin-top: 4px; color: #fbbf24; font-size: 12px; }
-      .codex-plus-user-script-dirs { margin-top: 6px; color: #a1a1aa; font-size: 11px; line-height: 1.4; word-break: break-all; }
-      .codex-plus-user-script-list { margin-top: 8px; display: grid; gap: 6px; }
-      .codex-plus-user-script-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 6px 8px; }
-      .codex-plus-user-script-name { font-size: 12px; }
-      .codex-plus-user-script-meta { margin-top: 2px; color: #a1a1aa; font-size: 11px; }
-      .codex-plus-user-script-error { margin-top: 2px; color: #f87171; font-size: 11px; word-break: break-all; }
-      .codex-plus-user-script-actions { display: grid; justify-items: end; gap: 8px; min-width: 120px; }
-      .codex-plus-user-script-reload { border: 1px solid rgba(255,255,255,.18); border-radius: 7px; background: #3f3f46; color: #f3f4f6; font: 12px system-ui, sans-serif; padding: 6px 8px; }
       /* Keep injected surfaces on Codex's own semantic palette in both themes. */
       :root {
         --codex-plus-bg-primary: var(--color-token-bg-primary, var(--token-bg-primary, #fff));
@@ -1218,7 +1306,7 @@
         --codex-plus-success: var(--color-text-success, #15803d);
         --codex-plus-warning: var(--color-text-warning, #a16207);
       }
-      :where(.${moreMenuClass}, .${actionTooltipClass}, .${zedRemoteToastClass}, .codex-delete-toast, .codex-delete-confirm-overlay, .codex-plus-modal-overlay, .${codexPlusPageClass}) {
+      :where(.${moreMenuClass}, .${actionTooltipClass}, .codex-delete-toast, .codex-delete-confirm-overlay, .codex-plus-modal-overlay, .${codexPlusPageClass}) {
         color: var(--codex-plus-text);
         font-family: inherit;
       }
@@ -1276,14 +1364,11 @@
       .codex-plus-about,
       .codex-plus-service-tier-thread-label,
       .codex-plus-backend-label,
-      .codex-plus-form-message,
-      .codex-plus-user-script-dirs,
-      .codex-plus-user-script-meta,
+      .codex-plus-form-message { color: var(--codex-plus-text-secondary); }
       .codex-delete-confirm-actions button,
       .codex-plus-action-button,
       .codex-plus-issue-button,
-      .codex-plus-service-tier-button,
-      .codex-plus-user-script-reload {
+      .codex-plus-service-tier-button {
         min-height: 32px;
         border: 1px solid var(--codex-plus-border);
         border-radius: var(--border-radius-lg, 8px);
@@ -1301,9 +1386,7 @@
       .codex-plus-issue-button:hover,
       .codex-plus-issue-button:focus-visible,
       .codex-plus-service-tier-button:hover,
-      .codex-plus-service-tier-button:focus-visible,
-      .codex-plus-user-script-reload:hover,
-      .codex-plus-user-script-reload:focus-visible { background: var(--codex-plus-bg-hover); outline: none; }
+      .codex-plus-service-tier-button:focus-visible { background: var(--codex-plus-bg-hover); outline: none; }
       .codex-delete-confirm-actions [data-codex-delete-confirm="true"] {
         border-color: var(--color-border-danger, #dc2626);
         background: var(--color-background-danger-solid, #dc2626);
@@ -1346,7 +1429,6 @@
       .codex-plus-tab-button { border-color: var(--codex-plus-border); border-radius: var(--border-radius-lg, 8px); background: transparent; color: var(--codex-plus-text-secondary); font: inherit; font-size: 13px; padding: 6px 10px; }
       .codex-plus-tab-button:hover,
       .codex-plus-tab-button:focus-visible { background: var(--codex-plus-bg-hover); color: var(--codex-plus-text); outline: none; }
-      .codex-plus-user-script-item { border-color: var(--codex-plus-border-subtle); border-radius: var(--border-radius-lg, 8px); background: var(--codex-plus-bg-secondary); }
       #${codexPlusSidebarNavId} .codex-plus-sidebar-nav-status,
       .codex-plus-backend-indicator { box-shadow: none; }
       #${codexPlusSidebarNavId} .codex-plus-sidebar-nav-status[data-status="ok"],
@@ -1368,14 +1450,14 @@
       .${codexServiceTierBadgeClass}[data-tier="failed"] { border-color: var(--color-border-danger, var(--codex-plus-danger)); background: var(--codex-plus-danger-bg); color: var(--codex-plus-danger); }
       .${codexServiceTierBadgeClass}[data-tier="unsupported"] { border-color: var(--color-border-warning, var(--codex-plus-border)); background: var(--color-background-warning-soft, var(--codex-plus-bg-hover)); color: var(--codex-plus-warning); }
       .codex-plus-form-message[data-status="ok"], .codex-plus-service-tier-status[data-status="ok"], .codex-plus-backend-label[data-status="ok"] { color: var(--codex-plus-success); }
-      .codex-plus-form-message[data-status="failed"], .codex-plus-service-tier-status[data-status="failed"], .codex-plus-backend-label[data-status="failed"], .codex-plus-user-script-error { color: var(--codex-plus-danger); }
-      .codex-plus-form-message[data-status="loading"], .codex-plus-service-tier-status[data-status="unsupported"], .codex-plus-user-script-warning, .codex-plus-model-compat-warning { color: var(--codex-plus-warning); }
+      .codex-plus-form-message[data-status="failed"], .codex-plus-service-tier-status[data-status="failed"], .codex-plus-backend-label[data-status="failed"] { color: var(--codex-plus-danger); }
+      .codex-plus-form-message[data-status="loading"], .codex-plus-service-tier-status[data-status="unsupported"], .codex-plus-model-compat-warning { color: var(--codex-plus-warning); }
     `;
     document.documentElement.appendChild(style);
   }
 
   function defaultCodexPlusSettings() {
-    return { pluginMarketplaceUnlock: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, pasteFix: false, threadIdBadge: false, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, zedRemoteOpen: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, serviceTierControls: false, petRealMouseLook: false, stepwise: false, answerOutline: false, dreamSkinEnabled: false, dreamSkinPaused: false, dreamSkinThemeConfig: window.__CODEX_PLUS_DREAM_SKIN_THEME__ || {}, dreamSkinImagePath: "" };
+    return { pluginMarketplaceUnlock: true, modelWhitelistUnlock: true, sessionDelete: true, markdownExport: true, pasteFix: false, threadIdBadge: false, conversationView: false, conversationViewMaxWidth: conversationViewDefaultWidth, threadScrollRestore: true, upstreamWorktreeCreate: true, nativeMenuPlacement: true, serviceTierControls: false, petRealMouseLook: false, stepwise: false, answerOutline: false };
   }
 
   const codexPlusBackendSettingMap = {
@@ -1386,7 +1468,6 @@
     threadIdBadge: "codexAppThreadIdBadge",
     conversationView: "codexAppConversationView",
     threadScrollRestore: "codexAppThreadScrollRestore",
-    zedRemoteOpen: "codexAppZedRemoteOpen",
     upstreamWorktreeCreate: "codexAppUpstreamWorktreeCreate",
     nativeMenuPlacement: "codexAppNativeMenuPlacement",
     serviceTierControls: "codexAppServiceTierControls",
@@ -1394,10 +1475,6 @@
     stepwise: "codexAppStepwiseEnabled",
     answerOutline: "codexAppAnswerOutlineEnabled",
     pasteFix: "codexAppPasteFix",
-    dreamSkinEnabled: "codexAppDreamSkinEnabled",
-    dreamSkinPaused: "codexAppDreamSkinPaused",
-    dreamSkinThemeConfig: "codexAppDreamSkinThemeConfig",
-    dreamSkinImagePath: "codexAppDreamSkinImagePath",
   };
   const codexPlusBackendMappedSettings = new Set(Object.keys(codexPlusBackendSettingMap));
 
@@ -1425,21 +1502,19 @@
         conversationView: false,
         conversationViewMaxWidth: conversationViewDefaultWidth,
         threadScrollRestore: false,
-        zedRemoteOpen: false,
         upstreamWorktreeCreate: false,
         nativeMenuPlacement: false,
         serviceTierControls: false,
         petRealMouseLook: false,
         stepwise: false,
         answerOutline: false,
-        dreamSkinEnabled: false,
-        dreamSkinPaused: false,
-        dreamSkinThemeConfig: window.__CODEX_PLUS_DREAM_SKIN_THEME__ || {},
-        dreamSkinImagePath: "",
       };
     }
     try {
-      const settings = { ...defaultCodexPlusSettings(), ...JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}"), ...backendCodexPlusSettings() };
+      const defaults = defaultCodexPlusSettings();
+      const stored = JSON.parse(localStorage.getItem(codexPlusSettingsKey) || "{}");
+      const knownSettings = Object.fromEntries(Object.entries(stored || {}).filter(([key]) => Object.hasOwn(defaults, key)));
+      const settings = { ...defaults, ...knownSettings, ...backendCodexPlusSettings() };
       if (relayPatchDisabled) {
         settings.pluginMarketplaceUnlock = false;
       }
@@ -1453,748 +1528,8 @@
     }
   }
 
-  // Dream skin runtime is adapted from Fei-Away/Codex-Dream-Skin's renderer injection.
-  function dreamSkinStylePreset(id, stylePreset) {
-    const preset = String(stylePreset || "").trim();
-    if (preset && preset !== "dream-original") return preset;
-    return ({
-      "caishen-lite": "caishen-lite",
-      "caishen-max": "caishen-max",
-      "caishen-readable": "caishen-readable",
-      "export-night": "export-night",
-      "global-founder-bright": "global-founder-bright",
-      "mythic-guardian-noir": "mythic-guardian-noir",
-      "codex-snow-skin": "codex-snow",
-      "glass-vision": "glass-vision",
-      "preset-midnight-aurora": "midnight-aurora",
-      "preset-amber-dusk": "amber-dusk",
-      "preset-forest-mist": "forest-mist",
-      "preset-cyber-neon": "cyber-neon",
-      "preset-sakura-dawn": "sakura-dawn",
-    })[String(id || "").trim()] || "dream-original";
-  }
-
-  function dreamSkinThemeConfig(theme) {
-    const fallback = window.__CODEX_PLUS_DREAM_SKIN_THEME__ || {};
-    const value = theme && typeof theme === "object" ? theme : fallback;
-    const colors = value.colors && typeof value.colors === "object" ? value.colors : fallback.colors || {};
-    return {
-      schemaVersion: value.schemaVersion === 1 ? 1 : 1,
-      id: String(value.id || fallback.id || "custom"),
-      name: String(value.name || fallback.name || "Dream Skin"),
-      stylePreset: dreamSkinStylePreset(
-        value.id || fallback.id,
-        value.stylePreset || fallback.stylePreset,
-      ),
-      brandSubtitle: String(value.brandSubtitle || fallback.brandSubtitle || "CODEX DREAM SKIN"),
-      statusText: String(value.statusText || fallback.statusText || "DREAM SKIN ONLINE"),
-      quote: String(value.quote || fallback.quote || "MAKE SOMETHING WONDERFUL"),
-      tagline: String(value.tagline || fallback.tagline || "把喜欢的画面变成可交互的 Codex 工作台。"),
-      projectPrefix: String(value.projectPrefix || fallback.projectPrefix || "选择项目 · "),
-      projectLabel: String(value.projectLabel || fallback.projectLabel || "◉  选择项目"),
-      colors: { ...(fallback.colors || {}), ...colors },
-    };
-  }
-
-  function dreamSkinCssString(value) {
-    return JSON.stringify(String(value ?? ""));
-  }
-
-  function dreamSkinParseRgb(value) {
-    if (!value || value === "transparent") return null;
-    const text = String(value).trim();
-    const hex = text.match(/^#([\da-f]{3}|[\da-f]{6}|[\da-f]{8})$/i)?.[1];
-    if (hex) {
-      const normalized = hex.length === 3
-        ? hex.split("").map((part) => `${part}${part}`).join("")
-        : hex.slice(0, 6);
-      return {
-        r: Number.parseInt(normalized.slice(0, 2), 16),
-        g: Number.parseInt(normalized.slice(2, 4), 16),
-        b: Number.parseInt(normalized.slice(4, 6), 16),
-      };
-    }
-    const match = text.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
-    if (!match) return null;
-    return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) };
-  }
-
-  function dreamSkinLuminance({ r, g, b }) {
-    const linear = [r, g, b].map((color) => {
-      const value = color / 255;
-      return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-    });
-    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
-  }
-
-  const codexPlusDreamSkinMainSurfaceMarker = "data-codex-plus-dream-skin-main-surface";
-
-  function ensureDreamSkinMainSurface() {
-    const existing = document.querySelector("main.main-surface");
-    if (existing) return existing;
-
-    const modularSurface = document.querySelector('main[class*="_MainContentSurface_"]');
-    const mainCandidates = modularSurface ? [] : [...document.querySelectorAll("main")];
-    const shellMain = modularSurface || (mainCandidates.length === 1 ? mainCandidates[0] : null);
-    if (!shellMain) return null;
-
-    shellMain.classList.add("main-surface");
-    shellMain.setAttribute(codexPlusDreamSkinMainSurfaceMarker, "true");
-    return shellMain;
-  }
-
-  function clearDreamSkinMainSurfaceCompatibility() {
-    document.querySelectorAll(`main[${codexPlusDreamSkinMainSurfaceMarker}="true"]`).forEach((node) => {
-      node.classList.remove("main-surface");
-      node.removeAttribute(codexPlusDreamSkinMainSurfaceMarker);
-    });
-  }
-
-  function detectDreamSkinShellMode() {
-    const root = document.documentElement;
-    const body = document.body;
-    const classText = `${root?.className || ""} ${body?.className || ""}`.toLowerCase();
-
-    if (/\b(dark|theme-dark|appearance-dark)\b/.test(classText)) return "dark";
-    if (/\b(light|theme-light|appearance-light)\b/.test(classText)) return "light";
-
-    const dataTheme = (
-      root?.getAttribute("data-theme") ||
-      root?.getAttribute("data-appearance") ||
-      root?.getAttribute("data-color-mode") ||
-      body?.getAttribute("data-theme") ||
-      body?.getAttribute("data-appearance") ||
-      ""
-    ).toLowerCase();
-    if (dataTheme.includes("dark")) return "dark";
-    if (dataTheme.includes("light")) return "light";
-
-    const checked = document.querySelector('input[name="appearance-theme"]:checked');
-    if (checked) {
-      const label = (checked.getAttribute("aria-label") || checked.value || "").toLowerCase();
-      if (label.includes("暗") || label.includes("dark")) return "dark";
-      if (label.includes("浅") || label.includes("light")) return "light";
-      if (label.includes("系统") || label.includes("system")) {
-        return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
-      }
-    }
-
-    try {
-      const colorScheme = getComputedStyle(root).colorScheme || "";
-      if (colorScheme.includes("dark") && !colorScheme.includes("light")) return "dark";
-      if (colorScheme.includes("light") && !colorScheme.includes("dark")) return "light";
-    } catch {
-    }
-
-    const samples = [
-      body,
-      ensureDreamSkinMainSurface(),
-      document.querySelector("aside.app-shell-left-panel"),
-    ].filter(Boolean);
-    let lightVotes = 0;
-    let darkVotes = 0;
-    for (const element of samples) {
-      try {
-        const rgb = dreamSkinParseRgb(getComputedStyle(element).backgroundColor);
-        if (!rgb) continue;
-        const luminance = dreamSkinLuminance(rgb);
-        if (luminance >= 0.55) lightVotes += 1;
-        else if (luminance <= 0.25) darkVotes += 1;
-      } catch {
-      }
-    }
-    if (lightVotes > darkVotes) return "light";
-    if (darkVotes > lightVotes) return "dark";
-
-    try {
-      if (window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
-    } catch {
-    }
-    return "light";
-  }
-
-  function dreamSkinThemeShellMode(theme) {
-    const background = dreamSkinParseRgb(theme?.colors?.background);
-    if (background) return dreamSkinLuminance(background) < 0.36 ? "dark" : "light";
-    return detectDreamSkinShellMode();
-  }
-
-  function dreamSkinArtBlobUrl(artDataUrl) {
-    if (!artDataUrl || !artDataUrl.startsWith("data:")) return "";
-    const comma = artDataUrl.indexOf(",");
-    if (comma < 0) return "";
-    const mime = /^data:([^;,]+)/.exec(artDataUrl)?.[1] || "image/png";
-    const binary = atob(artDataUrl.slice(comma + 1));
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return URL.createObjectURL(new Blob([bytes], { type: mime }));
-  }
-
-  function independentThemeDescriptor(stylePreset) {
-    const custom = (name, chromeMarkup) => ({
-      rootClass: `codex-theme-${name}`,
-      homeClass: `theme-${name}-home`,
-      shellClass: `theme-${name}-home-shell`,
-      chromeId: "codex-theme-chrome",
-      chromeClass: `theme-chrome-${name}`,
-      chromeMarkup,
-    });
-    const descriptors = {
-      "caishen-lite": custom("caishen-lite", `
-        <div class="csl-caption" data-theme-field="name"></div><div class="csl-seal">吉</div>`),
-      "caishen-max": custom("caishen-max", `
-        <div class="csm-banner" data-theme-field="name"></div><div class="csm-coins">◇ ◇ ◇</div>`),
-      "caishen-readable": custom("caishen-readable", ""),
-      "export-night": custom("export-night", `
-        <div class="exn-titlebar"><span data-theme-field="name"></span><span class="exn-cursor">█</span></div>`),
-      "global-founder-bright": custom("global-founder-bright", `
-        <div class="gfb-masthead"><span data-theme-field="name"></span><small data-theme-field="status"></small></div>`),
-      "mythic-guardian-noir": custom("mythic-guardian-noir", `
-        <div class="mgn-sigil"></div><div class="mgn-line"></div>`),
-      "midnight-aurora": custom("midnight-aurora", `
-        <div class="mda-arc"></div><div class="mda-star">✦</div>`),
-      "amber-dusk": custom("amber-dusk", `
-        <div class="abd-sun"></div><div class="abd-horizon"></div>`),
-      "forest-mist": custom("forest-mist", `
-        <div class="fm-branch"></div><div class="fm-leaf">⌁</div>`),
-      "cyber-neon": custom("cyber-neon", `
-        <div class="cn-index" data-theme-field="status"></div><div class="cn-scan"></div>`),
-      "sakura-dawn": custom("sakura-dawn", `
-        <div class="sd-petal">✿</div><div class="sd-rule"></div>`),
-      "codex-snow": {
-        rootClass: "codex-dream-skin",
-        homeClass: "dream-home",
-        shellClass: "dream-home-shell",
-        chromeId: "codex-dream-skin-chrome",
-        chromeClass: "",
-        chromeMarkup: `
-          <div class="dream-brand"><span class="dream-note">SKI</span><span><b>Snowline Codex</b><small>ice-blue training mode</small></span></div>
-          <div class="dream-signature">Freeski focus</div>
-          <div class="dream-sparkles"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-          <div class="dream-ribbon"><span>slopestyle</span><strong>double cork energy</strong><span>halfpipe</span></div>
-          <div class="dream-polaroid"></div>`,
-      },
-      "glass-vision": {
-        rootClass: "codex-glass-vision-skin",
-        homeClass: "glass-vision-home",
-        shellClass: "glass-vision-home-shell",
-        taskShellClass: "glass-vision-task-shell",
-        chromeId: "codex-glass-vision-skin-chrome",
-        chromeClass: "",
-        chromeMarkup: `
-          <div class="glass-vision-brand"><span class="glass-vision-orbit-mark"><i></i></span><span><b>GLASS VISION</b><small>SILVER BLUE · CELESTIAL</small></span></div>
-          <div class="glass-vision-status"><i></i><span>CRYSTAL FIELD</span></div>
-          <div class="glass-vision-atmosphere"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-          <div class="glass-vision-orbit-lines"><i></i><i></i><i></i></div><div class="glass-vision-prism"></div>`,
-      },
-    };
-    if (descriptors[stylePreset]) return descriptors[stylePreset];
-    if (codexPlusDreamSkinPlatform === "windows") {
-      return {
-        rootClass: "codex-dream-skin",
-        homeClass: "dream-home",
-        shellClass: "dream-home-shell",
-        taskClass: "dream-task",
-        chromeId: "codex-dream-skin-chrome",
-        chromeClass: "",
-        chromeMarkup: "",
-      };
-    }
-    return {
-      rootClass: "codex-dream-skin",
-      homeClass: "dream-skin-home",
-      shellClass: "dream-skin-home-shell",
-      chromeId: "codex-dream-skin-chrome",
-      chromeClass: "",
-      chromeMarkup: `
-        <div class="dream-skin-brand"><span class="dream-skin-portal-mark">◉</span><span><b data-theme-field="name"></b><small data-theme-field="subtitle"></small></span></div>
-        <div class="dream-skin-status"><i></i><span data-theme-field="status"></span></div>
-        <div class="dream-skin-quote" data-theme-field="quote"></div>
-        <div class="dream-skin-particles"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="dream-skin-orbit"></div>`,
-    };
-  }
-
-  const dreamSkinCompanionId = "codex-dream-skin-companion";
-  const dreamSkinCompanionDataUrlPrefixes = [
-    "data:image/png;base64,",
-    "data:image/jpeg;base64,",
-    "data:image/webp;base64,",
-    "data:image/gif;base64,",
-  ];
-  const dreamSkinCompanionBase64Pattern = /^[a-z0-9+/=\s]+$/i;
-
-  function removeDreamSkinCompanion() {
-    document.getElementById(dreamSkinCompanionId)?.remove();
-  }
-
-  function dreamSkinCompanionConfig(theme) {
-    const companion = theme && theme.companion;
-    if (!companion || typeof companion !== "object" || companion.enabled === false) return null;
-    const dataUrl = typeof companion.dataUrl === "string" ? companion.dataUrl.trim() : "";
-    const prefix = dreamSkinCompanionDataUrlPrefixes.find((candidate) =>
-      dataUrl.toLowerCase().startsWith(candidate));
-    if (
-      !dataUrl
-      || dataUrl.length > 240_000
-      || !prefix
-      || !dreamSkinCompanionBase64Pattern.test(dataUrl.slice(prefix.length))
-    ) {
-      return null;
-    }
-    const width = Math.max(48, Math.min(Number(companion.width) || 96, 160));
-    const side = ["left", "right"].includes(companion.side) ? companion.side : "auto";
-    const offsetX = Math.max(-48, Math.min(Number(companion.offsetX) || 0, 48));
-    const offsetY = Math.max(-160, Math.min(Number(companion.offsetY) || 0, 160));
-    return { dataUrl, width, side, offsetX, offsetY };
-  }
-
-  function visibleDreamSkinComposer() {
-    return [...document.querySelectorAll(".composer-footer, .composer-surface-chrome")]
-      .map((node) => ({ node, rect: node.getBoundingClientRect?.() }))
-      .filter(({ rect }) => rect && rect.width > 200 && rect.height > 0)
-      .sort((left, right) => right.rect.bottom - left.rect.bottom)[0] || null;
-  }
-
-  function ensureDreamSkinCompanion(theme) {
-    const config = dreamSkinCompanionConfig(theme);
-    const composer = visibleDreamSkinComposer();
-    if (!config || !composer) {
-      removeDreamSkinCompanion();
-      return;
-    }
-
-    let companion = document.getElementById(dreamSkinCompanionId);
-    if (!companion) {
-      companion = document.createElement("img");
-      companion.id = dreamSkinCompanionId;
-      companion.alt = "";
-      companion.setAttribute("aria-hidden", "true");
-      Object.assign(companion.style, {
-        position: "fixed",
-        zIndex: "39",
-        height: "auto",
-        maxHeight: "160px",
-        objectFit: "contain",
-        pointerEvents: "none",
-        userSelect: "none",
-        filter: "drop-shadow(0 8px 14px rgba(0, 0, 0, .18))",
-        transition: "left 160ms ease, top 160ms ease, opacity 160ms ease",
-      });
-      document.body.appendChild(companion);
-    }
-    if (companion.src !== config.dataUrl) {
-      companion.onload = () => ensureDreamSkinCompanion(theme);
-      companion.src = config.dataUrl;
-    }
-
-    const renderedHeight = companion.naturalWidth > 0 && companion.naturalHeight > 0
-      ? Math.min(160, config.width * companion.naturalHeight / companion.naturalWidth)
-      : config.width;
-
-    const gap = 12;
-    const edge = 8;
-    const right = composer.rect.right + gap + config.offsetX;
-    const left = composer.rect.left - config.width - gap + config.offsetX;
-    const fitsRight = right + config.width <= window.innerWidth - edge;
-    const fitsLeft = left >= edge;
-    const useRight = config.side === "right"
-      ? fitsRight
-      : config.side === "left"
-        ? !fitsLeft && fitsRight
-        : fitsRight || !fitsLeft;
-
-    if (!fitsRight && !fitsLeft) {
-      companion.style.opacity = "0";
-      return;
-    }
-
-    const top = Math.max(
-      edge,
-      Math.min(
-        composer.rect.bottom - renderedHeight + config.offsetY,
-        window.innerHeight - renderedHeight - edge,
-      ),
-    );
-    companion.style.width = `${config.width}px`;
-    companion.style.left = `${Math.round(useRight ? right : left)}px`;
-    companion.style.top = `${Math.round(top)}px`;
-    companion.style.opacity = "1";
-  }
-
-  function clearDreamSkinPresentation() {
-    const root = document.documentElement;
-    for (const className of [...(root?.classList || [])]) {
-      if (
-        className === "codex-dream-skin"
-        || className === "codex-glass-vision-skin"
-        || className.startsWith("codex-theme-")
-      ) {
-        root?.classList.remove(className);
-      }
-    }
-    root?.removeAttribute("data-dream-shell");
-    root?.removeAttribute("data-codex-plus-dream-skin");
-    root?.style.removeProperty("--dream-art");
-    root?.style.removeProperty("--dream-skin-art");
-    [
-      "--ds-bg",
-      "--ds-panel",
-      "--ds-panel-2",
-      "--ds-green",
-      "--ds-lime",
-      "--ds-cyan",
-      "--ds-purple",
-      "--ds-text",
-      "--ds-muted",
-      "--ds-line",
-      "--dream-ink",
-      "--dream-purple",
-      "--dream-violet",
-      "--dream-pink",
-      "--dream-blush",
-      "--dream-pearl",
-      "--dream-line",
-      "--dream-skin-name",
-      "--dream-skin-tagline",
-      "--dream-skin-project-prefix",
-      "--dream-skin-project-label",
-    ].forEach((name) => root?.style.removeProperty(name));
-    document.querySelectorAll(".dream-home").forEach((node) => node.classList.remove("dream-home"));
-    document.querySelectorAll('[role="main"][data-dream-home-layout]').forEach((node) => {
-      node.removeAttribute("data-dream-home-layout");
-    });
-    document.querySelectorAll(".dream-home-shell").forEach((node) => node.classList.remove("dream-home-shell"));
-    document.querySelectorAll(".dream-skin-home").forEach((node) => node.classList.remove("dream-skin-home"));
-    document.querySelectorAll(".dream-skin-home-shell").forEach((node) => node.classList.remove("dream-skin-home-shell"));
-    document.querySelectorAll("[class]").forEach((node) => {
-      for (const className of [...node.classList]) {
-        if (
-          /^theme-[a-z0-9-]+-(?:home|home-shell|task|task-shell)$/.test(className)
-          || /^glass-vision-(?:home|home-shell|task|task-shell)$/.test(className)
-        ) {
-          node.classList.remove(className);
-        }
-      }
-    });
-    document.getElementById(codexPlusDreamSkinStyleId)?.remove();
-    document.getElementById("codex-plus-dream-skin-style")?.remove();
-    document.getElementById("codex-dream-skin-chrome")?.remove();
-    document.getElementById("codex-glass-vision-skin-chrome")?.remove();
-    document.getElementById("codex-theme-chrome")?.remove();
-    removeDreamSkinCompanion();
-    clearDreamSkinMainSurfaceCompatibility();
-    const state = window.__CODEX_DREAM_SKIN_STATE__;
-    const descriptor = state?.descriptor;
-    if (descriptor) {
-      root?.classList.remove(descriptor.rootClass);
-      for (const className of [descriptor.homeClass, descriptor.shellClass, descriptor.taskClass, descriptor.taskShellClass]) {
-        if (!className) continue;
-        document.querySelectorAll(`.${className}`).forEach((node) => node.classList.remove(className));
-      }
-      document.getElementById(descriptor.chromeId)?.remove();
-    }
-    root?.classList.remove("dream-theme-dark", "dream-theme-light");
-    root?.removeAttribute("data-codex-theme");
-    root?.removeAttribute("data-codex-theme-root");
-    [
-      "--theme-bg", "--theme-panel", "--theme-panel-alt", "--theme-accent",
-      "--theme-accent-alt", "--theme-secondary", "--theme-highlight", "--theme-text",
-      "--theme-muted", "--theme-line", "--theme-art", "--glass-vision-art",
-      "--dream-accent", "--dream-accent-ink",
-    ].forEach((name) => root?.style.removeProperty(name));
-  }
-
-  function cleanupDreamSkin() {
-    window.__CODEX_DREAM_SKIN_DISABLED__ = true;
-    const state = window.__CODEX_DREAM_SKIN_STATE__;
-    if (typeof state?.cleanup === "function" && state.cleanup !== cleanupDreamSkin) {
-      try {
-        state.cleanup();
-      } catch {
-      }
-    }
-    const remainingState = window.__CODEX_DREAM_SKIN_STATE__;
-    remainingState?.observer?.disconnect();
-    if (remainingState?.timer) clearInterval(remainingState.timer);
-    if (remainingState?.scheduler?.timeout) clearTimeout(remainingState.scheduler.timeout);
-    if (remainingState?.resizeHandler) window.removeEventListener("resize", remainingState.resizeHandler);
-    if (remainingState?.mediaHandler && remainingState?.mediaQuery) {
-      try {
-        remainingState.mediaQuery.removeEventListener("change", remainingState.mediaHandler);
-      } catch {
-      }
-    }
-    if (remainingState?.artUrl) URL.revokeObjectURL(remainingState.artUrl);
-    delete window.__CODEX_DREAM_SKIN_STATE__;
-    window.__CODEX_GLASS_VISION_SKIN_DISABLED__ = true;
-    const glassState = window.__CODEX_GLASS_VISION_SKIN_STATE__;
-    try {
-      glassState?.cleanup?.();
-    } catch {
-    }
-    delete window.__CODEX_GLASS_VISION_SKIN_STATE__;
-    clearDreamSkinPresentation();
-  }
-
-  window.__CODEX_PLUS_CLEAR_DREAM_SKIN__ = cleanupDreamSkin;
-
-  function dreamSkinContentSignature(value) {
-    const text = String(value || "");
-    let hash = 2166136261;
-    for (let index = 0; index < text.length; index += 1) {
-      hash ^= text.charCodeAt(index);
-      hash = Math.imul(hash, 16777619);
-    }
-    return `${text.length}-${(hash >>> 0).toString(16)}`;
-  }
-
-  function applyIndependentThemeVariables(root, shell, theme, descriptor, artSource) {
-    const colors = theme.colors || {};
-    const accent = colors.accent || (shell === "light" ? "#d85c6c" : "#76e6cc");
-    const accentAlt = colors.accentAlt || accent;
-    const secondary = colors.secondary || (shell === "light" ? "#e7a3ad" : "#65bde8");
-    const variables = {
-      "--theme-bg": colors.background || (shell === "light" ? "#f6f3f4" : "#071116"),
-      "--theme-panel": colors.panel || (shell === "light" ? "#ffffff" : "#0b1a20"),
-      "--theme-panel-alt": colors.panelAlt || (shell === "light" ? "#fff8f9" : "#10272c"),
-      "--theme-accent": accent,
-      "--theme-accent-alt": accentAlt,
-      "--theme-secondary": secondary,
-      "--theme-highlight": colors.highlight || accentAlt,
-      "--theme-text": colors.text || (shell === "light" ? "#201b1c" : "#edf7f3"),
-      "--theme-muted": colors.muted || (shell === "light" ? "#6c6062" : "#9db7ae"),
-      "--theme-line": colors.line || (shell === "light" ? "rgba(90, 64, 68, .18)" : "rgba(150, 220, 200, .24)"),
-      "--theme-art": artSource,
-      "--dream-art": artSource,
-      "--dream-skin-art": artSource,
-      "--glass-vision-art": artSource,
-      "--dream-accent": accent,
-      "--dream-accent-ink": colors.panel || "#ffffff",
-    };
-    for (const [name, value] of Object.entries(variables)) {
-      if (typeof value === "string" && value) root.style.setProperty(name, value);
-    }
-    root.style.setProperty("--dream-skin-name", dreamSkinCssString(theme.name || "Codex Dream Skin"));
-    root.style.setProperty("--dream-skin-tagline", dreamSkinCssString(theme.tagline || "把喜欢的画面变成可交互的 Codex 工作台。"));
-    root.style.setProperty("--dream-skin-project-prefix", dreamSkinCssString(theme.projectPrefix || "选择项目 · "));
-    root.style.setProperty("--dream-skin-project-label", dreamSkinCssString(theme.projectLabel || "◉  选择项目"));
-    root.classList.toggle("dream-theme-dark", shell === "dark");
-    root.classList.toggle("dream-theme-light", shell === "light");
-    const preset = theme.stylePreset || "dream-original";
-    if (root.getAttribute("data-codex-theme") !== preset) root.setAttribute("data-codex-theme", preset);
-    if (root.getAttribute("data-codex-theme-root") !== descriptor.rootClass) {
-      root.setAttribute("data-codex-theme-root", descriptor.rootClass);
-    }
-  }
-
-  function installDreamSkin(settings) {
-    const theme = dreamSkinThemeConfig(settings.dreamSkinThemeConfig);
-    const styles = window.__CODEX_PLUS_DREAM_SKIN_STYLES__ || {};
-    const descriptor = independentThemeDescriptor(theme.stylePreset);
-    const cssText = String(styles[theme.stylePreset] || styles["dream-original"] || "");
-    const artDataUrl = String(window.__CODEX_PLUS_DREAM_SKIN_ART__ || "");
-    const themeSignature = dreamSkinContentSignature(JSON.stringify(theme));
-    const artSignature = String(window.__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__ || dreamSkinContentSignature(artDataUrl));
-    const version = `codex-plus:independent:${codexPlusDreamSkinPlatform}:r${codexPlusDreamSkinRevision}:${theme.stylePreset}:${themeSignature}:${artSignature}:${cssText.length}`;
-    const existingState = window.__CODEX_DREAM_SKIN_STATE__;
-    if (existingState?.version === version && typeof existingState.ensure === "function") {
-      window.__CODEX_DREAM_SKIN_DISABLED__ = false;
-      existingState.ensure();
-      return;
-    }
-
-    cleanupDreamSkin();
-    window.__CODEX_DREAM_SKIN_DISABLED__ = false;
-    const artUrl = dreamSkinArtBlobUrl(artDataUrl);
-    const artSource = artUrl ? `url("${artUrl}")` : "none";
-
-    const ensureStyle = (root) => {
-      let style = document.getElementById(codexPlusDreamSkinStyleId);
-      if (!style) {
-        style = document.createElement("style");
-        style.id = codexPlusDreamSkinStyleId;
-        (document.head || root).appendChild(style);
-      }
-      if (style.dataset.independentThemeVersion !== version) {
-        style.textContent = cssText;
-        style.dataset.independentThemeVersion = version;
-      }
-    };
-
-    const ensure = () => {
-      if (window.__CODEX_DREAM_SKIN_DISABLED__) return;
-      const root = document.documentElement;
-      if (!root || !document.body) return;
-      const shellMain = ensureDreamSkinMainSurface();
-      if (!shellMain) {
-        clearDreamSkinPresentation();
-        return;
-      }
-
-      root.classList.add(descriptor.rootClass);
-      root.setAttribute("data-codex-plus-dream-skin", "true");
-      const shell = dreamSkinThemeShellMode(theme);
-      root.setAttribute("data-dream-shell", shell);
-      applyIndependentThemeVariables(root, shell, theme, descriptor, artSource);
-      ensureStyle(root);
-      ensureDreamSkinCompanion(theme);
-
-      const homeIndicator = document.querySelector('[data-testid="home-icon"]');
-      const homeCandidate = homeIndicator?.closest('[role="main"]')
-        || [...document.querySelectorAll('[role="main"]')].find((candidate) =>
-          candidate.querySelector('[data-feature="game-source"]')
-          && candidate.querySelector('.group\\/home-suggestions'))
-        || null;
-      const homeHasClassicChrome = !!(
-        homeCandidate
-        && homeCandidate.querySelector('[data-feature="game-source"]')
-        && (
-          homeCandidate.querySelector('.group\\/home-suggestions')
-          || homeCandidate.querySelector('[class*="home-suggestions"]')
-          || homeCandidate.querySelector('[class*="_homeUtilityBar_"]')
-        )
-      );
-      const home = homeHasClassicChrome ? homeCandidate : null;
-      for (const candidate of document.querySelectorAll(`[role="main"].${descriptor.homeClass}`)) {
-        if (candidate !== home && candidate !== homeCandidate) candidate.classList.remove(descriptor.homeClass);
-      }
-      if (home) home.classList.add(descriptor.homeClass);
-      else if (homeCandidate && descriptor.homeClass) homeCandidate.classList.add(descriptor.homeClass);
-      if (descriptor.taskClass) {
-        for (const candidate of document.querySelectorAll('[role="main"]')) {
-          candidate.classList.toggle(descriptor.taskClass, candidate !== home && candidate !== homeCandidate);
-        }
-      }
-      for (const candidate of document.querySelectorAll('[role="main"]')) {
-        if (candidate === home) {
-          const hero = candidate.querySelector(':scope > div > div > div');
-          const structured = !!(hero && hero.querySelector('[data-feature="game-source"], [data-testid="home-icon"]'));
-          candidate.setAttribute('data-dream-home-layout', structured ? 'structured' : 'soft');
-        } else {
-          candidate.setAttribute('data-dream-home-layout', 'soft');
-        }
-      }
-      shellMain.classList.toggle(descriptor.shellClass, Boolean(homeCandidate));
-      if (descriptor.taskShellClass) shellMain.classList.toggle(descriptor.taskShellClass, !home);
-
-      let chrome = document.getElementById(descriptor.chromeId);
-      if (!chrome || chrome.parentElement !== document.body) {
-        chrome?.remove();
-        chrome = document.createElement("div");
-        chrome.id = descriptor.chromeId;
-        chrome.setAttribute("aria-hidden", "true");
-        chrome.innerHTML = descriptor.chromeMarkup;
-        document.body.appendChild(chrome);
-      }
-      if (chrome.className !== descriptor.chromeClass) chrome.className = descriptor.chromeClass;
-      const fields = {
-        name: theme.name || "Codex Dream Skin",
-        subtitle: theme.brandSubtitle || "CODEX DREAM SKIN",
-        status: theme.statusText || "THEME ONLINE",
-        quote: theme.quote || "MAKE SOMETHING WONDERFUL",
-      };
-      for (const [field, value] of Object.entries(fields)) {
-        const target = chrome.querySelector(`[data-theme-field="${field}"]`);
-        if (target && target.textContent !== value) target.textContent = value;
-      }
-      const shellBox = shellMain.getBoundingClientRect();
-      chrome.style.left = `${Math.round(shellBox.left)}px`;
-      chrome.style.top = `${Math.round(shellBox.top)}px`;
-      chrome.style.width = `${Math.round(shellBox.width)}px`;
-      chrome.style.height = `${Math.round(shellBox.height)}px`;
-      chrome.classList.toggle(descriptor.shellClass, Boolean(home));
-      if (descriptor.taskShellClass) chrome.classList.toggle(descriptor.taskShellClass, !home);
-      chrome.dataset.dreamShell = shell;
-    };
-
-    const scheduler = { timeout: null };
-    const scheduleEnsure = () => {
-      if (scheduler.timeout) clearTimeout(scheduler.timeout);
-      scheduler.timeout = setTimeout(() => {
-        scheduler.timeout = null;
-        ensure();
-      }, 180);
-    };
-    const observer = new MutationObserver(scheduleEnsure);
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["class", "data-theme", "data-appearance", "data-color-mode"],
-    });
-    const timer = setInterval(ensure, 4000);
-    const resizeHandler = scheduleEnsure;
-    window.addEventListener("resize", resizeHandler, { passive: true });
-
-    let mediaQuery = null;
-    let mediaHandler = null;
-    try {
-      mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-      mediaHandler = scheduleEnsure;
-      mediaQuery.addEventListener("change", mediaHandler);
-    } catch {
-    }
-
-    window.__CODEX_DREAM_SKIN_STATE__ = {
-      ensure,
-      cleanup: cleanupDreamSkin,
-      observer,
-      timer,
-      scheduler,
-      resizeHandler,
-      mediaQuery,
-      mediaHandler,
-      artUrl,
-      version,
-      descriptor,
-      themeId: theme.id || "custom",
-      detectShellMode: detectDreamSkinShellMode,
-    };
-    ensure();
-  }
-
-  function refreshDreamSkin() {
-    const settings = codexPlusSettings();
-    if (settings.dreamSkinEnabled && !settings.dreamSkinPaused) ensureDreamSkinMainSurface();
-    if (window.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__) {
-      if (codexPlusBackendSettingsLoaded && (!settings.dreamSkinEnabled || settings.dreamSkinPaused)) {
-        cleanupDreamSkin();
-      } else {
-        const state = window.__CODEX_DREAM_SKIN_STATE__ || window.__CODEX_GLASS_VISION_SKIN_STATE__;
-        state?.ensure?.();
-        ensureDreamSkinCompanion(
-          window.__CODEX_PLUS_DREAM_SKIN_THEME__ || settings.dreamSkinThemeConfig,
-        );
-      }
-      return;
-    }
-    if (!settings.dreamSkinEnabled || settings.dreamSkinPaused) {
-      cleanupDreamSkin();
-      return;
-    }
-    installDreamSkin(settings);
-  }
-
-  function applyDreamSkinLiveUpdate(payload) {
-    if (!payload || String(payload.revision || "") !== codexPlusDreamSkinRevision) return false;
-    if (typeof payload.artDataUrl === "string" && payload.artDataUrl) {
-      window.__CODEX_PLUS_DREAM_SKIN_ART__ = payload.artDataUrl;
-    }
-    window.__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__ = String(payload.artSignature || "");
-    window.__CODEX_PLUS_DREAM_SKIN_THEME__ = payload.theme && typeof payload.theme === "object" ? payload.theme : {};
-    codexPlusBackendSettings.codexAppDreamSkinEnabled = true;
-    codexPlusBackendSettings.codexAppDreamSkinPaused = false;
-    codexPlusBackendSettings.codexAppDreamSkinThemeConfig = window.__CODEX_PLUS_DREAM_SKIN_THEME__;
-    refreshDreamSkin();
-    return true;
-  }
-
-  window.__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__ = codexPlusDreamSkinRevision;
-  window.__CODEX_PLUS_APPLY_DREAM_SKIN__ = applyDreamSkinLiveUpdate;
-
   function setCodexPlusSetting(key, value) {
+    if (!Object.hasOwn(defaultCodexPlusSettings(), key)) return;
     const backendKey = codexPlusBackendSettingMap[key];
     if (backendKey) {
       if (key === "stepwise") syncStepwisePanel(value);
@@ -2394,7 +1729,7 @@
   // 「Fast 仅支持 …」的提示文案，塞进没验证过的模型等于对用户做出错误承诺。
   // 第三方模型（deepseek 等）走下面 codexServiceTierFastSupportedForModel 里的
   // 模型元数据判定：上游自己声明了 priority 才认。
-  ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].forEach((model) => codexServiceTierSupportedFastModels.add(model));
+  ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].forEach((model) => codexServiceTierSupportedFastModels.add(model));
 
   function uniqueCodexAppAssetUrls(urls) {
     return Array.from(new Set((urls || []).filter((url) => typeof url === "string" && url.includes("/assets/") && url.split("?")[0].endsWith(".js"))));
@@ -2489,7 +1824,7 @@
     const urls = codexAppAssetCandidateUrls();
     const preferred = urls.filter((url) => {
       const name = (url.split("/").pop() || "").toLowerCase();
-      return /use-host-config|app-server-manager-signals|app-initial|app-main|page-|chatg|signals|server-manager|gwqc41kz|c1urrgy0|hsvsqcnf/.test(name);
+      return /use-host-config|app-server-manager-signals|app-initial|app-main|page-|chatg|signals|server-manager/.test(name);
     });
     // Prefer known request-client modules, then the larger application bundles.
     preferred.sort((left, right) => {
@@ -2497,7 +1832,6 @@
         const name = (url.split("/").pop() || "").toLowerCase();
         if (name.includes("use-host-config")) return 0;
         if (name.includes("app-server-manager-signals")) return 1;
-        if (name.includes("gwqc41kz") || name.includes("c1urrgy0") || name.includes("hsvsqcnf")) return 2;
         if (name.includes("app-initial") && name.includes("app-main")) return 3;
         if (name.includes("app-main")) return 4;
         return 5;
@@ -3849,6 +3183,7 @@
       void loadCodexModelCatalog();
     }
     refreshCodexPlusBackendToggles();
+    if (loaded) syncOfficialUsagePolicy();
     return loaded;
   }
 
@@ -3871,8 +3206,11 @@
     try {
       const previousConversationView = !!codexPlusSettings().conversationView;
       const loaded = await loadBackendSettingsState();
-      if (loaded && previousConversationView !== !!codexPlusSettings().conversationView) {
-        refreshConversationView();
+      if (loaded) {
+        syncOfficialUsagePolicy();
+        if (previousConversationView !== !!codexPlusSettings().conversationView) {
+          refreshConversationView();
+        }
       }
     } finally {
       syncBackendSettingsInFlight = false;
@@ -3904,7 +3242,6 @@
     scan();
   }
 
-  let codexPlusUserScripts = { enabled: true, builtin_dir: "", user_dir: "", scripts: [] };
   let codexPlusBackendStatus = window.__codexPlusBackendStatus || { status: "checking", message: "正在检查后端…" };
   let codexPlusBackendCheckSeq = 0;
   let codexPlusBackendCheckInFlight = false;
@@ -3913,10 +3250,18 @@
   const codexPlusBackendGeneration = (Number(window.__codexPlusBackendGeneration) || 0) + 1;
   window.__codexPlusBackendGeneration = codexPlusBackendGeneration;
 
-  function recordCodexPlusBridgeSuccess() {
+  function recordCodexPlusBridgeHealth(field) {
     if (codexPlusBackendGeneration !== window.__codexPlusBackendGeneration) return;
     const health = window.__codexPlusBridgeHealth || (window.__codexPlusBridgeHealth = {});
-    health.lastSuccessAt = Date.now();
+    health[field] = Date.now();
+  }
+
+  function recordCodexPlusBridgeSuccess() {
+    recordCodexPlusBridgeHealth("lastSuccessAt");
+  }
+
+  function recordCodexPlusBridgeAttempt() {
+    recordCodexPlusBridgeHealth("lastAttemptAt");
   }
 
   function renderBackendStatus() {
@@ -3963,7 +3308,7 @@
         codexPlusBackendStatus = window.__codexPlusBackendStatus = nextStatus;
         if (typeof nextStatus.hideOfficialUsageAlert === "boolean") {
           window.__CODEX_PLUS_HIDE_OFFICIAL_USAGE_ALERT__ = nextStatus.hideOfficialUsageAlert;
-          refreshOfficialUsageAlertVisibility();
+          syncOfficialUsagePolicy();
         }
         void syncBackendSettingsFromHeartbeat();
       } else {
@@ -4003,45 +3348,8 @@
     checkBackendStatus();
   }
 
-  function userScriptStatusLabel(status) {
-    return { loaded: "已加载", failed: "失败", disabled: "已禁用", not_loaded: "未加载", loading: "加载中" }[status] || status || "未知";
-  }
-
-  function renderUserScripts() {
-    const enabledToggle = document.querySelector("[data-codex-user-scripts-enabled]");
-    if (enabledToggle) enabledToggle.dataset.enabled = String(!!codexPlusUserScripts.enabled);
-    const dirs = document.querySelector("[data-codex-user-script-dirs]");
-    if (dirs) dirs.textContent = `内置：${codexPlusUserScripts.builtin_dir || "未找到"}  用户：${codexPlusUserScripts.user_dir || "未找到"}`;
-    const list = document.querySelector("[data-codex-user-script-list]");
-    if (!list) return;
-    if (!codexPlusUserScripts.scripts?.length) {
-      list.textContent = "未发现用户脚本。";
-      return;
-    }
-    list.innerHTML = codexPlusUserScripts.scripts.map((script) => `
-      <div class="codex-plus-user-script-item">
-        <div>
-          <div class="codex-plus-user-script-name">${escapeHtml(script.name || script.key)}</div>
-          <div class="codex-plus-user-script-meta">${script.source === "builtin" ? "内置" : "用户"} · ${userScriptStatusLabel(script.status)}</div>
-          ${script.error ? `<div class="codex-plus-user-script-error">${escapeHtml(script.error)}</div>` : ""}
-        </div>
-        <button type="button" class="codex-plus-toggle" data-codex-user-script-key="${escapeHtml(script.key)}" data-enabled="${String(!!script.enabled)}"><span></span></button>
-      </div>
-    `).join("");
-  }
-
-  async function loadUserScripts(path = "/user-scripts/list", payload = {}) {
-    const requestPayload = path === "/user-scripts/list"
-      ? { ...payload, runtime_status: window.__codexPlusUserScripts?.scripts || {} }
-      : payload;
-    const result = await postJson(path, requestPayload);
-    if (result?.scripts) {
-      codexPlusUserScripts = result;
-      renderUserScripts();
-    }
-  }
-
   function selectCodexPlusTab(tab) {
+    tab = "home";
     document.querySelectorAll(".codex-plus-modal-content").forEach((modal) => {
       modal.dataset.codexPlusActiveTab = tab;
     });
@@ -4051,7 +3359,6 @@
     document.querySelectorAll("[data-codex-plus-panel]").forEach((panel) => {
       panel.hidden = panel.getAttribute("data-codex-plus-panel") !== tab;
     });
-    if (tab === "userScripts") loadUserScripts();
   }
 
   function setCodexPlusSidebarNavActive(active) {
@@ -4151,7 +3458,6 @@
         </div>
         <div class="codex-plus-tabs" role="tablist" aria-label="Z8 Codex">
           <button type="button" class="codex-plus-tab-button" data-codex-plus-tab="home" data-active="true">主页</button>
-          <button type="button" class="codex-plus-tab-button" data-codex-plus-tab="userScripts" data-active="false">用户脚本</button>
         </div>
         <div class="codex-plus-modal-body">
           <div class="codex-plus-panel" data-codex-plus-panel="home">
@@ -4235,10 +3541,6 @@
               <button type="button" class="codex-plus-toggle" data-codex-plus-setting="threadScrollRestore"><span></span></button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">Zed Remote open</div><div class="codex-plus-row-description">Open supported remote SSH file references in Zed without patching Codex.app.</div></div>
-              <button type="button" class="codex-plus-toggle" data-codex-plus-setting="zedRemoteOpen"><span></span></button>
-            </div>
-            <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">Upstream worktree</div><div class="codex-plus-row-description">Create a Git worktree from a fresh upstream branch, equivalent to git worktree add -b branch path upstream/base.</div></div>
               <div class="codex-plus-worktree-actions">
                 <button type="button" class="codex-plus-action-button" data-codex-upstream-worktree-open="true">创建</button>
@@ -4254,38 +3556,15 @@
               <button type="button" class="codex-plus-action-button" data-codex-open-manager="true">打开管理工具</button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">打开 DevTools</div><div class="codex-plus-row-description">打开当前 Codex 页面开发者工具，方便查看用户脚本报错。</div></div>
+              <div><div class="codex-plus-row-title">打开 DevTools</div><div class="codex-plus-row-description">打开当前 Codex 页面开发者工具，查看页面诊断信息。</div></div>
               <button type="button" class="codex-plus-action-button" data-codex-open-devtools="true">打开 DevTools</button>
             </div>
             <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">关于 Z8 Codex</div><div class="codex-plus-about">Z8 Codex 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-codex-plus-build="true">${codexPlusBuild}</span><br>GitHub: <a href="https://github.com/z8infra/z8-codex" target="_blank" rel="noreferrer">https://github.com/z8infra/z8-codex</a><br>Discord: <a href="https://discord.gg/y96kX7A76v" target="_blank" rel="noreferrer">https://discord.gg/y96kX7A76v</a><br>Telegram: <a href="https://t.me/CodexPlusPlus" target="_blank" rel="noreferrer">https://t.me/CodexPlusPlus</a></div></div>
-            </div>
-            <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">Discord 社区</div><div class="codex-plus-row-description">加入 Discord 获取更新消息、反馈问题或交流使用体验。</div></div>
-              <button type="button" class="codex-plus-action-button" data-codex-plus-discord="true">打开 Discord</button>
-            </div>
-            <div class="codex-plus-row">
-              <div><div class="codex-plus-row-title">Telegram 频道</div><div class="codex-plus-row-description">加入 Telegram 获取更新消息和交流使用体验。</div></div>
-              <button type="button" class="codex-plus-action-button" data-codex-plus-telegram="true">打开 Telegram</button>
+              <div><div class="codex-plus-row-title">关于 Z8 Codex</div><div class="codex-plus-about">Z8 Codex 是通过外部 launcher 注入的增强菜单，不修改 Codex App 原始安装文件。<br>Build: <span data-codex-plus-build="true">${codexPlusBuild}</span><br>GitHub: <a href="https://github.com/z8infra/z8-codex" target="_blank" rel="noreferrer">https://github.com/z8infra/z8-codex</a></div></div>
             </div>
             <div class="codex-plus-row">
               <div><div class="codex-plus-row-title">提出问题</div><div class="codex-plus-row-description">打开 GitHub Issues 反馈问题或建议。</div></div>
               <button type="button" class="codex-plus-issue-button" data-codex-plus-issue="true">提出问题</button>
-            </div>
-          </div>
-          <div class="codex-plus-panel" data-codex-plus-panel="userScripts" hidden>
-            <div class="codex-plus-row" data-codex-user-scripts-section="true">
-              <div>
-                <div class="codex-plus-row-title">用户脚本</div>
-                <div class="codex-plus-row-description">启用用户脚本：自动加载内置目录和用户配置目录中的 .js 文件。</div>
-                <div class="codex-plus-user-script-warning">禁用后需重载页面或重启 Codex++ 才能完全移除已执行效果。</div>
-                <div class="codex-plus-user-script-dirs" data-codex-user-script-dirs="true">正在读取脚本目录…</div>
-                <div class="codex-plus-user-script-list" data-codex-user-script-list="true">正在读取用户脚本…</div>
-              </div>
-              <div class="codex-plus-user-script-actions">
-                <button type="button" class="codex-plus-toggle" data-codex-user-scripts-enabled="true"><span></span></button>
-                <button type="button" class="codex-plus-user-script-reload" data-codex-user-scripts-reload="true">重新加载用户脚本</button>
-              </div>
             </div>
           </div>
         </div>
@@ -4332,23 +3611,10 @@
         openManagerFromCodex();
         return;
       }
-      if (target?.closest("[data-codex-plus-discord]")) {
-        window.open("https://discord.gg/y96kX7A76v", "_blank");
-        return;
-      }
-      if (target?.closest("[data-codex-plus-telegram]")) {
-        window.open("https://t.me/CodexPlusPlus", "_blank");
-        return;
-      }
       const issueButton = target?.closest("[data-codex-plus-issue]");
       if (issueButton) {
         const issueUrl = "https://github.com/z8infra/z8-codex/issues";
         window.open(issueUrl, "_blank");
-        return;
-      }
-      const userScriptsEnabled = target?.closest("[data-codex-user-scripts-enabled]");
-      if (userScriptsEnabled) {
-        loadUserScripts("/user-scripts/set-enabled", { enabled: userScriptsEnabled.dataset.enabled !== "true" });
         return;
       }
       if (target?.closest("[data-codex-service-tier-inherit]")) {
@@ -4377,15 +3643,6 @@
       }
       if (target?.closest("[data-codex-service-tier-thread-fast]")) {
         setCodexThreadServiceTierMode("fast");
-        return;
-      }
-      const userScriptToggle = target?.closest("[data-codex-user-script-key]");
-      if (userScriptToggle) {
-        loadUserScripts("/user-scripts/set-script-enabled", { key: userScriptToggle.getAttribute("data-codex-user-script-key"), enabled: userScriptToggle.dataset.enabled !== "true" });
-        return;
-      }
-      if (target?.closest("[data-codex-user-scripts-reload]")) {
-        loadUserScripts("/user-scripts/reload", {});
         return;
       }
       if (target?.closest("[data-codex-upstream-worktree-open]")) {
@@ -4424,7 +3681,6 @@
     refreshCodexPlusBackendToggles();
     renderBackendStatus();
     void loadCodexServiceTierState();
-    loadUserScripts();
   }
 
   function openCodexPlusPage() {
@@ -5619,7 +4875,22 @@
         if (safeKey) pruned[safeKey] = value;
       });
     window.__codexThreadScrollEntries = pruned;
-    localStorage.setItem(codexThreadScrollKey, JSON.stringify({ version: codexThreadScrollVersion, entries: pruned }));
+    const payload = JSON.stringify({ version: codexThreadScrollVersion, entries: pruned });
+    try {
+      localStorage.setItem(codexThreadScrollKey, payload);
+    } catch {
+      // 本地存储配额已满时不能把异常抛到页面全局，否则滚动保存会把渲染进程打进刷新循环。
+      try {
+        const newestKey = Object.keys(pruned)[0];
+        const emergency = Object.create(null);
+        if (newestKey) emergency[newestKey] = pruned[newestKey];
+        window.__codexThreadScrollEntries = emergency;
+        localStorage.removeItem(codexThreadScrollKey);
+        localStorage.setItem(codexThreadScrollKey, JSON.stringify({ version: codexThreadScrollVersion, entries: emergency }));
+      } catch {
+        try { localStorage.removeItem(codexThreadScrollKey); } catch { /* 放弃持久化，内存副本仍可用 */ }
+      }
+    }
   }
 
   function currentThreadScroller() {
@@ -6210,7 +5481,10 @@
           recordCodexPlusBridgeSuccess();
           return result;
         }
-        if (result?.timeout) sendCodexPlusDiagnostic("backend_bridge_timeout", { path });
+        if (result?.timeout) {
+          recordCodexPlusBridgeAttempt();
+          sendCodexPlusDiagnostic("backend_bridge_timeout", { path });
+        }
         const fallback = await fetchBackendStatusFromHelper(path, payload);
         if (fallback?.status === "ok") {
           sendCodexPlusDiagnostic("backend_status_bridge_failed_http_fallback_ok", {
@@ -7103,18 +6377,23 @@
   }
 
   const appServerModelRequestPatchMaxMisses = 8;
+  const appServerModelRequestPatchMaxRetryDelayMs = 30000;
   let appServerModelRequestPatchMissCount = 0;
   let appServerModelRequestPatchDisabled = false;
   let appServerModelRequestPatchPromise = null;
   let appServerModelRequestPatchRetryTimer = 0;
+  let appServerModelRequestPatchRetryDelayMs = 250;
 
   function scheduleAppServerModelRequestPatchRetry() {
     if (!codexRemoteSessionProviderPatchEnabled()) return;
     if (appServerModelRequestPatchRetryTimer) return;
+    // issue #2256/#2255：固定 250ms 重试在 Codex 改 asset 命名后变成每秒 4 轮的全量
+    // rescan（每轮 fetch 全部 app asset）。改为指数退避， miss 计满后由熔断停掉。
     appServerModelRequestPatchRetryTimer = window.setTimeout(() => {
       appServerModelRequestPatchRetryTimer = 0;
       installAppServerModelRequestPatch();
-    }, 250);
+    }, appServerModelRequestPatchRetryDelayMs);
+    appServerModelRequestPatchRetryDelayMs = Math.min(appServerModelRequestPatchRetryDelayMs * 4, appServerModelRequestPatchMaxRetryDelayMs);
   }
 
   function noteAppServerModelRequestPatchMiss(event, detail) {
@@ -7131,16 +6410,21 @@
     if (appServerModelRequestPatchMissCount === 1) {
       sendCodexPlusDiagnostic(event, detail);
     }
-    if (codexRemoteSessionProviderPatchEnabled()) {
-      scheduleAppServerModelRequestPatchRetry();
-      return;
-    }
+    // issue #2256：provider 重试路径以前在这里提前 return，绕过下面的 maxMisses
+    // 熔断，失败变成 250ms 无限重试（每轮全量 rescan 全部 app assets）。
+    // 现在两个路径统一计数：先按 maxMisses 熔断，未熔断时再走指数退避重试。
     if (appServerModelRequestPatchMissCount >= appServerModelRequestPatchMaxMisses && !appServerModelRequestPatchDisabled) {
       appServerModelRequestPatchDisabled = true;
+      clearTimeout(appServerModelRequestPatchRetryTimer);
+      appServerModelRequestPatchRetryTimer = 0;
       sendCodexPlusDiagnostic("model_app_server_request_patch_skipped", {
         misses: appServerModelRequestPatchMissCount,
         lastEvent: event,
       });
+      return;
+    }
+    if (!appServerModelRequestPatchDisabled) {
+      scheduleAppServerModelRequestPatchRetry();
     }
   }
 
@@ -7165,6 +6449,7 @@
           clearTimeout(appServerModelRequestPatchRetryTimer);
           appServerModelRequestPatchRetryTimer = 0;
           appServerModelRequestPatchMissCount = 0;
+          appServerModelRequestPatchRetryDelayMs = 250;
           window.__codexPlusAppServerModelRequestPatchInstalled = codexAppServerModelRequestPatchVersion;
           sendCodexPlusDiagnostic("model_app_server_request_patch_installed", {
             moduleCount: modules.length,
@@ -9554,9 +8839,171 @@
     scheduleConversationViewAlign();
   }
 
+
+  const officialUsageWindowMarker = "data-codex-plus-official-usage-window";
+  // 重新注入会替换局部配置；已有 Query 钩子必须通过同一个运行时读取新策略。
+  const officialUsageRuntime = window.__codexPlusOfficialUsageRuntime ||= {
+    rawPayloads: new WeakMap(),
+    rewriteDepth: 0,
+  };
+  officialUsageRuntime.pendingPublications ||= new WeakMap();
+  officialUsageRuntime.payloadPolicies ||= new WeakMap();
+  officialUsageRuntime.rewrite = rewriteTrackedOfficialUsagePayload;
+  window.__codexPlusOfficialUsageWindowCleanup?.();
+
+  function isOfficialLowQuotaSidebarCard(node) {
+    if (node?.nodeType !== Node.ELEMENT_NODE || node.getAttribute("role") !== "status") return false;
+    const className = typeof node.className === "string" ? node.className : "";
+    if (!className.includes("rounded-2xl") || !className.includes("ring-border")) return false;
+    const content = node.textContent || "";
+    return content.includes("usage remaining")
+      || (content.includes("剩余") && content.includes("使用量"))
+      || content.includes("重新加入 Plus")
+      || content.includes("Rejoin Plus");
+  }
+
+  function isOfficialLowQuotaComposerBanner(node) {
+    return isOfficialLowQuotaUpsellBanner(node) || isOfficialLowQuotaComposerAside(node);
+  }
+
+  function isOfficialLowQuotaUpsellBanner(node) {
+    if (node?.nodeType !== Node.ELEMENT_NODE || node.getAttribute("role") !== "status") return false;
+    const labelledBy = node.getAttribute("aria-labelledby") || "";
+    const describedBy = node.getAttribute("aria-describedby") || "";
+    if (!labelledBy.startsWith("upsell-banner-title-") || !describedBy.startsWith("upsell-banner-description-")) return false;
+    const content = node.textContent || "";
+    return content.includes("Codex 和工作使用额度已用完")
+      || content.includes("You’re out of Codex and Work usage")
+      || content.includes("You're out of Codex and Work usage")
+      || content.includes("立即升级以获取更多使用量")
+      || content.includes("Upgrade for more now");
+  }
+
+  function isOfficialLowQuotaComposerAside(node) {
+    if (node?.nodeType !== Node.ELEMENT_NODE || node.tagName !== "ASIDE") return false;
+    const className = typeof node.className === "string" ? node.className : "";
+    if (!className.includes("rounded-3xl")) return false;
+    const content = node.textContent || "";
+    if (content.length > 400) return false;
+    return content.includes("Codex 和工作使用额度已用完")
+      || content.includes("You’re out of Codex and Work usage")
+      || content.includes("You're out of Codex and Work usage");
+  }
+
+  function isOfficialLowQuotaWindow(node) {
+    return isOfficialLowQuotaSidebarCard(node) || isOfficialLowQuotaComposerBanner(node);
+  }
+
+  let officialUsageWindowObserver = null;
+  let officialUsageWindowHidden = false;
+  let officialUsageWindowStartPending = false;
+  let officialUsageWindowActive = true;
+  const officialUsageWindowDisplays = new WeakMap();
+
+  function restoreOfficialUsageWindow(node) {
+    if (node.getAttribute(officialUsageWindowMarker) !== "hidden") return;
+    node.removeAttribute(officialUsageWindowMarker);
+    const display = officialUsageWindowDisplays.get(node);
+    if (display?.value) node.style.setProperty("display", display.value, display.priority);
+    else node.style.removeProperty("display");
+    officialUsageWindowDisplays.delete(node);
+  }
+
+  function syncOfficialUsageWindow(node) {
+    if (!isOfficialLowQuotaWindow(node)) {
+      restoreOfficialUsageWindow(node);
+      return;
+    }
+    if (node.getAttribute(officialUsageWindowMarker) !== "hidden") {
+      officialUsageWindowDisplays.set(node, {
+        value: node.style.getPropertyValue("display"),
+        priority: node.style.getPropertyPriority("display"),
+      });
+      node.setAttribute(officialUsageWindowMarker, "hidden");
+      node.style.setProperty("display", "none", "important");
+    }
+  }
+
+  function hideOfficialUsageWindowsWithin(root) {
+    if (typeof Node === "undefined" || !root || root.nodeType !== Node.ELEMENT_NODE) return;
+    const nodes = [root, ...root.querySelectorAll(`[role="status"], aside, [${officialUsageWindowMarker}]`)];
+    for (const node of nodes) syncOfficialUsageWindow(node);
+  }
+
+  function restoreOfficialUsageWindows() {
+    for (const node of document.querySelectorAll(`[${officialUsageWindowMarker}="hidden"]`)) {
+      restoreOfficialUsageWindow(node);
+    }
+  }
+
+  function startOfficialUsageWindowBlock() {
+    if (officialUsageWindowObserver || typeof MutationObserver !== "function" || !document.body) return;
+    officialUsageWindowObserver = new MutationObserver((records) => {
+      if (!officialUsageWindowActive || !officialUsageWindowHidden) return;
+      const changedContainers = new Set();
+      for (const record of records) {
+        // React 可只更新已有文本或插入卡片内部节点，因此也检查变更目标的祖先。
+        let parent = record.target?.nodeType === Node.ELEMENT_NODE ? record.target : record.target?.parentElement;
+        for (; parent; parent = parent.parentElement) {
+          if (parent.matches?.(`[role="status"], aside, [${officialUsageWindowMarker}]`)) changedContainers.add(parent);
+        }
+        for (const node of record.addedNodes || []) {
+          if (node?.nodeType !== Node.ELEMENT_NODE) continue;
+          hideOfficialUsageWindowsWithin(node);
+        }
+      }
+      for (const node of changedContainers) syncOfficialUsageWindow(node);
+    });
+    officialUsageWindowObserver.observe(document.body, {
+      childList: true, subtree: true, characterData: true,
+      attributes: true, attributeFilter: ["role", "class", "aria-labelledby", "aria-describedby"],
+    });
+    hideOfficialUsageWindowsWithin(document.body);
+  }
+
+  function stopOfficialUsageWindowBlock() {
+    officialUsageWindowObserver?.disconnect();
+    officialUsageWindowObserver = null;
+    restoreOfficialUsageWindows();
+  }
+
+  function startOfficialUsageWindowsAfterReady() {
+    officialUsageWindowStartPending = false;
+    if (officialUsageWindowActive) syncOfficialUsageWindowMode(officialUsagePolicyKey());
+  }
+
+  window.__codexPlusOfficialUsageWindowCleanup = () => {
+    officialUsageWindowActive = false;
+    officialUsageWindowHidden = false;
+    document.removeEventListener("DOMContentLoaded", startOfficialUsageWindowsAfterReady);
+    stopOfficialUsageWindowBlock();
+  };
+
+  // 卡片不读用量字段。观察器只在开关打开时挂一次；心跳不查页面。
+  // 关掉或离开官登时只按标记恢复，不再整页重认。
+  function syncOfficialUsageWindowMode(key) {
+    if (!officialUsageWindowActive) return;
+    const hide = key === "official-hide" || key === "official-hide-unlock";
+    if (!hide) {
+      if (!officialUsageWindowHidden && !officialUsageWindowObserver) return;
+      officialUsageWindowHidden = false;
+      officialUsageWindowStartPending = false;
+      stopOfficialUsageWindowBlock();
+      return;
+    }
+    officialUsageWindowHidden = true;
+    if (officialUsageWindowObserver) return;
+    if (!document.body) {
+      if (officialUsageWindowStartPending) return;
+      officialUsageWindowStartPending = true;
+      document.addEventListener("DOMContentLoaded", startOfficialUsageWindowsAfterReady, { once: true });
+      return;
+    }
+    startOfficialUsageWindowBlock();
+  }
+
   function scanLightweight() {
     installStyle();
-    refreshOfficialUsageAlertVisibility();
     installCodexServiceTierDispatcherPatch();
     installCodexAppServerClientPrototypePatch();
     installCodexRemoteSessionRecoveryListener();
@@ -9581,546 +9028,347 @@
     refreshCodexServiceTierControls();
   }
 
-  function officialUsageAlertHidden() {
-    return window.__CODEX_PLUS_HIDE_OFFICIAL_USAGE_ALERT__ === true;
+  function officialUsagePolicy() {
+    // 新一代设置尚未返回时沿用最后一次真实配置，避免重新注入短暂恢复额度锁。
+    if (!codexPlusBackendSettingsLoaded && officialUsageRuntime.lastPolicy) return officialUsageRuntime.lastPolicy;
+    const profile = codexRemoteSessionActiveProfile();
+    const official = String(profile?.relayMode || "") === "official";
+    const policy = {
+      official,
+      hideAlerts: official && window.__CODEX_PLUS_HIDE_OFFICIAL_USAGE_ALERT__ === true,
+      unlockSend: window.__codexPlusApiQuotaGate?.permitsExternalApi(codexPlusBackendSettings, "local") === true,
+    };
+    if (codexPlusBackendSettingsLoaded) officialUsageRuntime.lastPolicy = policy;
+    return policy;
   }
 
-  function officialUsageAlertCards(scope = document) {
-    const root = scope?.querySelectorAll ? scope : document;
-    return Array.from(root.querySelectorAll('aside.app-shell-left-panel [role="status"][aria-live="polite"]')).filter((card) => {
-      if (!(card instanceof HTMLElement)) return false;
-      const progress = card.querySelector('progress[max="100"]');
-      if (!progress) return false;
-      const dismissButton = Array.from(card.querySelectorAll("button")).find((button) =>
-        /dismiss usage alert|关闭使用量提醒/i.test(button.getAttribute("aria-label") || ""),
-      );
-      return !!dismissButton;
-    });
+  function officialUsagePolicyKey(policy = officialUsagePolicy()) {
+    if (!policy.official || (!policy.hideAlerts && !policy.unlockSend)) return "off";
+    if (policy.hideAlerts) return policy.unlockSend ? "official-hide-unlock" : "official-hide";
+    return "official-unlock";
   }
 
-  function officialUsageAlertContainer(card) {
-    const parent = card.parentElement;
-    return parent?.children.length === 1 && parent.matches("div.w-full") ? parent : card;
+  function isOfficialUsageStatus(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const rateLimit = value.rate_limit;
+    if (!rateLimit || typeof rateLimit !== "object" || typeof rateLimit.allowed !== "boolean") return false;
+    return typeof value.plan_type === "string"
+      || typeof value.user_id === "string"
+      || typeof value.account_id === "string";
   }
 
-  function refreshOfficialUsageAlertVisibility() {
-    const hidden = officialUsageAlertHidden();
-    document.querySelectorAll('[data-codex-plus-usage-alert-hidden="true"]').forEach((container) => {
-      delete container.dataset.codexPlusUsageAlertHidden;
-    });
-    if (!hidden) return;
-    officialUsageAlertCards().forEach((card) => {
-      const container = officialUsageAlertContainer(card);
-      container.dataset.codexPlusUsageAlertHidden = "true";
-    });
+  function isImageGenerationUpsell(value) {
+    return String(value?.banner_type || "") === "image_generation_limit_reached";
   }
 
-  let zedRemoteStatusPromise = null;
-  const zedRemoteMissingHostMessage = "Cannot determine remote SSH host for this file";
-
-  function showZedRemoteToast(message) {
-    document.querySelectorAll(`.${zedRemoteToastClass}`).forEach((node) => node.remove());
-    const toast = document.createElement("div");
-    toast.className = zedRemoteToastClass;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3200);
+  function isMainRateLimitQueryKey(queryKey) {
+    return Array.isArray(queryKey)
+      && queryKey[0] === "rate-limit-status"
+      && queryKey[1] !== "image-generation";
   }
 
-  async function loadZedRemoteStatus() {
-    zedRemoteStatusPromise = zedRemoteStatusPromise || postJson("/zed-remote/status", {});
-    return zedRemoteStatusPromise;
-  }
-
-  async function resolveZedRemoteHost(hostId) {
-    const result = await postJson("/zed-remote/resolve-host", { hostId });
-    return result?.status === "ok" && result.ssh ? result.ssh : null;
-  }
-
-  function zedRemoteIsRemoteHostId(hostId) {
-    return zedRemoteString(hostId).startsWith("remote-ssh-");
-  }
-
-  function zedRemoteProjectIdFromRow(row) {
-    const projectList = row?.closest?.("[data-app-action-sidebar-project-list-id]");
-    const projectId = zedRemoteString(projectList?.getAttribute?.("data-app-action-sidebar-project-list-id"));
-    if (projectId) return projectId;
-    const projectRow = row?.closest?.("[data-app-action-sidebar-project-id]");
-    return zedRemoteString(projectRow?.getAttribute?.("data-app-action-sidebar-project-id"));
-  }
-
-  function zedRemoteWorkspaceRootFromObject(source) {
-    if (!source || typeof source !== "object") return "";
-    for (const key of ["remoteWorkspaceRoot", "workspaceRoot", "displayCwd", "cwd", "rootPath", "workingDirectory", "workingDir"]) {
-      const workspaceRoot = zedRemoteString(source[key]);
-      if (workspaceRoot.startsWith("/") && !/\/\.codex$/.test(workspaceRoot)) return workspaceRoot;
+  // 提示仍遵守用户开关；发送解锁仅用于已启用的本地外部混合 relay。
+  // 纯官登或官方上游保留真实发送限制；limit_reached 也属于发送门禁。
+  // 符合现有 relay 策略时，在查询发布前更新 allowed 和 limit_reached。
+  // 百分比、重置时间、账号、积分和消费上限不动。图片额度横幅单独留下。
+  function rewriteOfficialUsageStatus(value, policy = officialUsagePolicy()) {
+    if (!policy.official || (!policy.hideAlerts && !policy.unlockSend) || !isOfficialUsageStatus(value)) return null;
+    const next = { ...value };
+    let changed = false;
+    if (value.rate_limit_reached_type != null) {
+      next.rate_limit_reached_type = null;
+      changed = true;
     }
-    const hostConfig = source.hostConfig || source.sshHostConfig || source.remoteHostConfig || source.ssh || {};
-    for (const key of ["remoteWorkspaceRoot", "workspaceRoot", "rootPath", "cwd"]) {
-      const workspaceRoot = zedRemoteString(hostConfig[key]);
-      if (workspaceRoot.startsWith("/") && !/\/\.codex$/.test(workspaceRoot)) return workspaceRoot;
+    if (value.model_picker_upsell != null) {
+      next.model_picker_upsell = null;
+      changed = true;
     }
-    return "";
-  }
-
-  function zedRemoteWorkspaceRootFromElement(element) {
-    for (const key of zedRemoteReactKeys(element)) {
-      const workspaceRoot = zedRemoteWalkObject(element[key], zedRemoteWorkspaceRootFromObject, { maxDepth: 10, maxNodes: 320 });
-      if (workspaceRoot) return workspaceRoot;
+    const rateLimit = value.rate_limit;
+    if (policy.unlockSend && (rateLimit.allowed !== true || rateLimit.limit_reached === true)) {
+      next.rate_limit = { ...rateLimit, allowed: true, limit_reached: false };
+      changed = true;
     }
-    return "";
-  }
-
-  function zedRemoteWorkspaceRootFromRow(row) {
-    for (let node = row; node && node !== document.body; node = node.parentElement) {
-      const workspaceRoot = zedRemoteWorkspaceRootFromElement(node);
-      if (workspaceRoot) return workspaceRoot;
-    }
-    return "";
-  }
-
-  function zedRemoteActiveThreadRow() {
-    const rows = sessionRows(true).filter((row) => row instanceof HTMLElement);
-    return rows.find((row) => row.getAttribute("data-app-action-sidebar-thread-active") === "true")
-      || rows.find((row) => row.getAttribute("aria-current") === "page" || row.getAttribute("aria-current") === "true")
-      || null;
-  }
-
-  function zedRemoteCurrentFallbackPayload() {
-    const row = zedRemoteActiveThreadRow();
-    const ref = row ? sessionRefFromRow(row) : currentSessionRef();
-    const threadId = ref.session_id || locationThreadId();
-    const hostId = zedRemoteString(row?.getAttribute?.("data-app-action-sidebar-thread-host-id"));
-    const isRemoteHost = zedRemoteIsRemoteHostId(hostId);
-    const payload = {};
-    if (threadId) payload.threadId = threadId;
-    if (hostId && hostId !== "local") payload.hostId = hostId;
-    if (!isRemoteHost) return payload;
-    const remoteWorkspaceRoot = zedRemoteWorkspaceRootFromRow(row);
-    const remoteProjectId = zedRemoteProjectIdFromRow(row);
-    if (remoteWorkspaceRoot) payload.remoteWorkspaceRoot = remoteWorkspaceRoot;
-    if (remoteProjectId) payload.remoteProjectId = remoteProjectId;
-    return payload;
-  }
-
-  async function resolveZedRemoteFallbackRequest() {
-    const payload = zedRemoteCurrentFallbackPayload();
-    if (!zedRemoteIsRemoteHostId(payload.hostId)) return null;
-    const result = await postJson("/zed-remote/fallback-request", payload);
-    return result?.status === "ok" && result.request ? result.request : null;
-  }
-
-  function zedRemoteOpenStrategy() {
-    const strategy = zedRemoteString(codexPlusBackendSettings.zedRemoteOpenStrategy);
-    return ["addToFocusedWorkspace", "reuseWindow", "newWindow", "default"].includes(strategy)
-      ? strategy
-      : "addToFocusedWorkspace";
-  }
-
-  function zedRemoteString(value) {
-    return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
-  }
-
-  function zedRemoteTruthy(value) {
-    if (value === true) return true;
-    if (typeof value === "string") return /^(true|1|yes|enabled|ssh)$/i.test(value.trim());
-    return false;
-  }
-
-  function zedRemoteHasTrustedSshSignal(source, hostConfig) {
-    return zedRemoteTruthy(source?.supportsSsh) || zedRemoteTruthy(hostConfig?.supportsSsh);
-  }
-
-  function zedRemoteContextFromObject(source) {
-    if (!source || typeof source !== "object") return null;
-    const hostConfig = source.hostConfig || source.sshHostConfig || source.remoteHostConfig || source.ssh || {};
-    const host = zedRemoteString(source.remoteHost || source.sshHost || source.host || source.hostname || source.hostName || hostConfig.host || hostConfig.hostname || hostConfig.hostName || hostConfig.sshHost);
-    const hostId = zedRemoteString(source.hostId);
-    const cwd = zedRemoteString(source.cwd || source.workspaceRoot || source.rootPath || source.remoteWorkspaceRoot || hostConfig.remoteWorkspaceRoot || hostConfig.workspaceRoot || hostConfig.rootPath);
-    if ((!host || !zedRemoteHasTrustedSshSignal(source, hostConfig)) && !(hostId.startsWith("remote-ssh-") && cwd.startsWith("/"))) return null;
-    const user = zedRemoteString(source.remoteUser || source.sshUser || source.user || source.username || hostConfig.user || hostConfig.username || hostConfig.sshUser);
-    const port = zedRemoteString(source.remotePort || source.sshPort || source.port || hostConfig.port || hostConfig.sshPort);
-    const workspaceRoot = cwd;
-    return { hostId, ssh: { user, host, port }, workspaceRoot };
-  }
-
-  function zedRemoteWalkObject(root, visitor, options = {}) {
-    const maxDepth = options.maxDepth || 6;
-    const maxNodes = options.maxNodes || 180;
-    const visited = new WeakSet();
-    const stack = [{ value: root, depth: 0 }];
-    let scanned = 0;
-    while (stack.length && scanned < maxNodes) {
-      const { value, depth } = stack.pop();
-      if (!value || typeof value !== "object" || visited.has(value) || depth > maxDepth) continue;
-      visited.add(value);
-      scanned += 1;
-      const result = visitor(value);
-      if (result) return result;
-      if (value instanceof Element || value === window || value === document || value === document.body || value === document.documentElement) continue;
-      for (const key of Object.keys(value).slice(0, 80)) {
-        if (key === "ownerDocument" || key === "parentElement" || key === "parentNode" || key === "children" || key === "childNodes") continue;
-        let child;
-        try {
-          child = value[key];
-        } catch {
-          continue;
-        }
-        if (child && typeof child === "object") stack.push({ value: child, depth: depth + 1 });
+    if (policy.hideAlerts) {
+      if (value.sidebar_usage_warnings != null) {
+        next.sidebar_usage_warnings = null;
+        changed = true;
+      }
+      if (value.rate_limit_warning != null) {
+        next.rate_limit_warning = null;
+        changed = true;
+      }
+      if (value.rate_limit_upsell != null && !isImageGenerationUpsell(value.rate_limit_upsell)) {
+        next.rate_limit_upsell = null;
+        changed = true;
       }
     }
-    return null;
+    return changed ? next : null;
   }
 
-  function zedRemoteReactKeys(element) {
-    return Object.keys(element).filter((key) => key.startsWith("__reactFiber") || key.startsWith("__reactInternalInstance") || key.startsWith("__reactProps"));
-  }
-
-  function zedRemoteContextFromElement(element) {
-    for (const key of zedRemoteReactKeys(element)) {
-      const context = zedRemoteWalkObject(element[key], zedRemoteContextFromObject);
-      if (context) return context;
+  function rewriteOfficialUsagePayload(value, policy = officialUsagePolicy()) {
+    if (!value || typeof value !== "object") return value;
+    if (isOfficialUsageStatus(value)) return rewriteOfficialUsageStatus(value, policy) || value;
+    if (value.usage && value.usage !== value && isOfficialUsageStatus(value.usage)) {
+      const usage = rewriteOfficialUsageStatus(value.usage, policy);
+      return usage ? { ...value, usage } : value;
     }
-    return null;
-  }
-
-  function zedRemoteContextForElement(element) {
-    for (let node = element; node && node !== document.body; node = node.parentElement) {
-      const context = zedRemoteContextFromElement(node);
-      if (context) return context;
-    }
-    return null;
-  }
-
-  function zedRemoteHostIdFromText(text) {
-    const source = String(text || "");
-    const match = source.match(/\bremote-ssh-[A-Za-z0-9:_-]+\b/);
-    return match ? match[0] : "";
-  }
-
-  function zedRemoteWorkspaceRootForPath(path) {
-    const source = String(path || "").trim();
-    const projects = Array.from(document.querySelectorAll(selectors.sidebarThread))
-      .map((row) => ({
-        label: (row.textContent || "").replace(/\s+/g, " ").trim(),
-        selected: row.getAttribute("aria-current") === "page" || row.getAttribute("data-selected") === "true" || row.getAttribute("data-active") === "true" || row.className.includes("selected"),
-      }))
-      .filter((row) => row.label);
-    const selected = projects.find((row) => row.selected)?.label || "";
-    for (const label of [selected, ...projects.map((row) => row.label)]) {
-      const name = label.match(/^([A-Za-z0-9._-]+)/)?.[1];
-      if (name && source.includes(`/repo/${name}/`)) return source.slice(0, source.indexOf(`/repo/${name}/`) + `/repo/${name}`.length);
-    }
-    const repoIndex = source.indexOf("/bin/repo/");
-    if (repoIndex >= 0) {
-      const afterRepo = source.slice(repoIndex + "/bin/repo/".length);
-      const project = afterRepo.split("/")[0];
-      if (project) return source.slice(0, repoIndex + "/bin/repo/".length + project.length);
-    }
-    return source;
-  }
-
-  function zedRemoteFallbackContextForElement(element) {
-    const pathText = (element.textContent || "").trim();
-    if (!pathText.startsWith("/")) return null;
-    const root = element.closest("main") || document.body;
-    const hostId = zedRemoteHostIdFromText(root?.textContent || "") || "remote-ssh-codex-managed:remote";
-    return { hostId, ssh: { user: "", host: "", port: "" }, workspaceRoot: zedRemoteWorkspaceRootForPath(pathText) };
-  }
-
-  function zedRemoteContextFromSerializedState(text) {
-    const source = String(text || "");
-    if (!source.includes("hostConfig") || !source.includes("supportsSsh") || !source.includes("remoteWorkspaceRoot")) return null;
-    const trimmed = source.trim();
-    if (/^[{[]/.test(trimmed)) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        const context = zedRemoteWalkObject(parsed, zedRemoteContextFromObject, { maxDepth: 10, maxNodes: 300 });
-        if (context) return context;
-      } catch {
-      }
-    }
-    if (!/['"]supportsSsh['"]\s*:\s*true/.test(source)) return null;
-    const fieldValue = (name) => {
-      const match = source.match(new RegExp(`["']${name}["']\\s*:\\s*["']([^"']+)["']`));
-      return match ? match[1] : "";
-    };
-    const host = fieldValue("host") || fieldValue("hostname") || fieldValue("hostName") || fieldValue("sshHost") || fieldValue("remoteHost");
-    if (!host) return null;
-    return {
-      ssh: {
-        user: fieldValue("user") || fieldValue("username") || fieldValue("sshUser") || fieldValue("remoteUser"),
-        host,
-        port: fieldValue("port") || fieldValue("sshPort") || fieldValue("remotePort"),
-      },
-      workspaceRoot: fieldValue("remoteWorkspaceRoot") || fieldValue("workspaceRoot") || fieldValue("rootPath"),
-    };
-  }
-
-  const zedRemoteContextCacheTtlMs = 1200;
-  let zedRemoteContextCache = { scope: null, at: 0, value: null };
-
-  function zedRemoteScopedElements(scope, selector) {
-    const root = scope?.querySelectorAll ? scope : document;
-    const nodes = [];
-    if (scope instanceof HTMLElement && scope.matches?.(selector)) nodes.push(scope);
-    root.querySelectorAll?.(selector).forEach((node) => nodes.push(node));
-    return Array.from(new Set(nodes));
-  }
-
-  function zedRemoteContextFromDataset(node) {
-    if (!(node instanceof HTMLElement)) return null;
-    const data = node.dataset;
-    return zedRemoteContextFromObject({
-      hostConfig: data.hostConfig ? { host: data.hostConfig, supportsSsh: true } : {},
-      supportsSsh: data.supportsSsh || data.supportsSshRemote,
-      sshHost: data.sshHost,
-      remoteHost: data.remoteHost,
-      host: data.host,
-      sshUser: data.sshUser,
-      remoteUser: data.remoteUser,
-      user: data.user,
-      sshPort: data.sshPort,
-      remotePort: data.remotePort,
-      port: data.port,
-      remoteWorkspaceRoot: data.remoteWorkspaceRoot,
-      workspaceRoot: data.workspaceRoot,
-    });
-  }
-
-  function zedRemoteContextUncached(scope = document) {
-    const explicitSelector = "[data-host-config], [data-ssh-host], [data-remote-host], [data-remote-workspace-root], [data-supports-ssh]";
-    for (const node of zedRemoteScopedElements(scope, explicitSelector)) {
-      if (isExtensionUiNode(node)) continue;
-      const context = zedRemoteContextFromDataset(node);
-      if (context) return context;
-    }
-    const reactSelector = "[data-remote-path], [data-file-path], [data-path], [data-open-in-targets], [data-open-file], [data-codex-open-file], [role='menuitem']";
-    const reactNodes = zedRemoteScopedElements(scope, reactSelector);
-    if (scope instanceof HTMLElement && !isExtensionUiNode(scope)) reactNodes.unshift(scope);
-    for (const node of Array.from(new Set(reactNodes)).slice(0, 60)) {
-      if (!(node instanceof HTMLElement) || isExtensionUiNode(node)) continue;
-      const context = zedRemoteContextFromElement(node);
-      if (context) return context;
-    }
-    if (scope !== document) return null;
-    const scripts = Array.from(document.querySelectorAll("script[type='application/json'], script[data-state], script#__NEXT_DATA__, script:not([src])"));
-    for (const script of scripts.slice(0, 20)) {
-      const context = zedRemoteContextFromSerializedState(script.textContent || "");
-      if (context) return context;
-    }
-    return null;
-  }
-
-  function zedRemoteContext(scope = document) {
-    const settings = codexPlusSettings();
-    if (!settings.zedRemoteOpen) return null;
-    const now = Date.now();
-    if (zedRemoteContextCache.scope === scope && now - zedRemoteContextCache.at < zedRemoteContextCacheTtlMs) {
-      return zedRemoteContextCache.value;
-    }
-    const value = zedRemoteContextUncached(scope);
-    zedRemoteContextCache = { scope, at: now, value };
     return value;
   }
 
-  function zedRemoteAbsolutePath(value, workspaceRoot) {
-    const text = String(value || "").trim();
-    if (!text) return "";
-    if (text.startsWith("/")) return text;
-    if (workspaceRoot && !text.includes("://") && !text.startsWith("~")) {
-      return `${workspaceRoot.replace(/\/+$/, "")}/${text.replace(/^\.\//, "")}`;
+  function rewriteTrackedOfficialUsagePayload(value) {
+    const raw = officialUsageRuntime.rawPayloads.get(value) || value;
+    const key = officialUsagePolicyKey();
+    if (key === "off") return raw;
+    // 提示开关与发送策略独立变化时必须从真实快照重算；稳定心跳复用已改写对象。
+    if (raw !== value && officialUsageRuntime.payloadPolicies.get(value) === key) return value;
+    const next = rewriteOfficialUsagePayload(raw);
+    if (next !== raw) {
+      officialUsageRuntime.rawPayloads.set(next, raw);
+      officialUsageRuntime.payloadPolicies.set(next, key);
     }
-    return "";
+    return next;
   }
 
-  function zedRemoteMetadataRemotePath(source) {
-    if (!source || typeof source !== "object") return "";
-    return zedRemoteString(source.remotePath || source.remote_path || source.path || source.filePath || source.file_path || source.openFile?.remotePath || source.openFile?.path);
+  function looksLikeQueryClient(value) {
+    return !!value
+      && typeof value.getQueryCache === "function"
+      && typeof value.setQueryData === "function";
   }
 
-  function zedRemotePathFromElementMetadata(element) {
-    const dataPath = element.dataset.remotePath || element.dataset.filePath || element.dataset.path || "";
-    if (dataPath) return dataPath;
-    for (const key of zedRemoteReactKeys(element)) {
-      const path = zedRemoteWalkObject(element[key], zedRemoteMetadataRemotePath, { maxDepth: 6, maxNodes: 120 });
-      if (path) return path;
-    }
-    return "";
-  }
-
-  function zedRemoteInlinePathFromElement(element, context) {
-    if (!context?.hostId && !context?.ssh?.host) return "";
-    const text = (element.textContent || "").trim();
-    if (!text || text.length > 600 || !text.startsWith("/")) return "";
-    const path = zedRemoteAbsolutePath(text, context.workspaceRoot || "");
-    if (!path) return "";
-    if (context.workspaceRoot && !path.startsWith(`${context.workspaceRoot.replace(/\/+$/, "")}/`) && path !== context.workspaceRoot) return "";
-    return path;
-  }
-
-  function zedRemoteAnchorHasOpenFileMetadata(anchor) {
-    if (!(anchor instanceof HTMLAnchorElement)) return false;
-    if (anchor.dataset.remotePath || anchor.dataset.filePath || anchor.dataset.path || anchor.dataset.openInTargets || anchor.dataset.openFile || anchor.dataset.codexOpenFile) return true;
-    const label = `${anchor.getAttribute("aria-label") || ""} ${anchor.getAttribute("data-testid") || ""} ${anchor.getAttribute("rel") || ""}`;
-    return /open[-_\s]?file|open-in-targets|remote/i.test(label) && !!zedRemotePathFromElementMetadata(anchor);
-  }
-
-  function zedRemoteFileCandidates(context, scope = document) {
-    const candidates = [];
+  // 图片额度使用同一条 /wham/usage，只能靠查询键 image-generation 排除。
+  // 这里只在第一次挂上缓存时找客户端，不进每轮 DOM 扫描。
+  function queryClientFromFiber(fiber) {
     const seen = new Set();
-    const addCandidate = (node, candidateContext, rawPath) => {
-      if (!candidateContext?.ssh?.host && !candidateContext?.hostId) return;
-      const path = zedRemoteAbsolutePath(rawPath, candidateContext.workspaceRoot || "");
-      if (!path || seen.has(path)) return;
-      seen.add(path);
-      candidates.push({ node, request: { ssh: candidateContext.ssh, hostId: candidateContext.hostId || "", path } });
-    };
-    const selectors = "[data-remote-path], [data-file-path], [data-path], [data-open-in-targets], [data-open-file], [data-codex-open-file], a[data-remote-path], a[data-file-path], a[data-path]";
-    zedRemoteScopedElements(scope, selectors).forEach((node) => {
-      if (!(node instanceof HTMLElement) || isExtensionUiNode(node)) return;
-      if (node instanceof HTMLAnchorElement && !zedRemoteAnchorHasOpenFileMetadata(node)) return;
-      addCandidate(node, zedRemoteContextForElement(node) || context, zedRemotePathFromElementMetadata(node));
-    });
-    if (scope !== document) {
-      zedRemoteScopedElements(scope, "span.inline-markdown, code, [class*='inlineMarkdown']").forEach((node) => {
-        if (!(node instanceof HTMLElement) || isExtensionUiNode(node)) return;
-        const candidateContext = zedRemoteContextForElement(node) || context || zedRemoteFallbackContextForElement(node);
-        if (!candidateContext?.hostId && !candidateContext?.ssh?.host) return;
-        const path = zedRemoteInlinePathFromElement(node, candidateContext);
-        if (path) addCandidate(node, candidateContext, path);
-      });
+    const stack = [fiber];
+    let visited = 0;
+    while (stack.length && visited < 8000) {
+      const node = stack.pop();
+      if (!node || typeof node !== "object" || seen.has(node)) continue;
+      seen.add(node);
+      visited += 1;
+      const props = node.memoizedProps || node.pendingProps;
+      if (looksLikeQueryClient(props?.client)) return props.client;
+      if (looksLikeQueryClient(props?.value)) return props.value;
+      if (looksLikeQueryClient(node.stateNode)) return node.stateNode;
+      const state = node.memoizedState;
+      if (state && typeof state === "object" && looksLikeQueryClient(state.memoizedState)) return state.memoizedState;
+      if (node.child) stack.push(node.child);
+      if (node.sibling) stack.push(node.sibling);
     }
-    return candidates;
-  }
-
-  function zedRemoteBestOpenRequest(scope = document, context = zedRemoteContext(scope) || zedRemoteContext(document) || {}) {
-    const candidates = zedRemoteFileCandidates(context, scope);
-    if (candidates.length) return candidates[0].request;
     return null;
   }
 
-  async function openZedRemote(request) {
-    let nextRequest = request;
-    if (!nextRequest?.ssh?.host && nextRequest?.hostId) {
-      const ssh = await resolveZedRemoteHost(nextRequest.hostId);
-      nextRequest = ssh ? { ...nextRequest, ssh } : nextRequest;
+  let officialUsageClient = null;
+
+  function findCodexQueryClient() {
+    const explicit = window.__REACT_QUERY_CLIENT__ || window.__codexQueryClient;
+    if (looksLikeQueryClient(explicit)) return explicit;
+    if (looksLikeQueryClient(officialUsageClient)) return officialUsageClient;
+    const roots = [document.getElementById?.("root"), document.body, document.documentElement].filter(Boolean);
+    for (const root of roots) {
+      let key = "";
+      try {
+        key = Object.keys(root).find((name) => name.startsWith("__reactContainer$") || name.startsWith("__reactFiber$")) || "";
+      } catch {
+        key = "";
+      }
+      if (!key) continue;
+      let fiber = root[key];
+      if (fiber?.stateNode?.current) fiber = fiber.stateNode.current;
+      const client = queryClientFromFiber(fiber);
+      if (client) {
+        officialUsageClient = client;
+        return client;
+      }
     }
-    if (!nextRequest?.ssh?.host) {
-      showZedRemoteToast(zedRemoteMissingHostMessage);
-      return;
+    return null;
+  }
+
+  function mainRateLimitQueries(client) {
+    const cache = client.getQueryCache?.();
+    if (cache && typeof cache.findAll === "function") {
+      return cache.findAll({ queryKey: ["rate-limit-status"] }).filter((query) => isMainRateLimitQueryKey(query?.queryKey));
     }
-    nextRequest = {
-      ...nextRequest,
-      strategy: nextRequest.strategy || zedRemoteOpenStrategy(),
-      remember: codexPlusBackendSettings.zedRemoteProjectRegistryEnabled !== false,
+    if (typeof client.getQueriesData === "function") {
+      return client.getQueriesData({ queryKey: ["rate-limit-status"] })
+        .filter(([queryKey]) => isMainRateLimitQueryKey(queryKey))
+        .map(([queryKey, data]) => ({ queryKey, state: { data } }));
+    }
+    return [];
+  }
+
+  // Query.setData 是 GET /wham/usage 和 SSE snapshot 共用的发布点。
+  // 在通知订阅者之前改写，RK 第一次读到的 allowed 就是结果。
+  function patchOfficialUsageQueryPublication(client) {
+    const cache = client.getQueryCache?.();
+    if (!cache) return;
+    const listed = typeof cache.getAll === "function"
+      ? cache.getAll()
+      : (typeof cache.findAll === "function" ? cache.findAll({ queryKey: ["rate-limit-status"] }) : []);
+    const query = listed.find((item) => typeof Object.getPrototypeOf(item)?.setData === "function");
+    if (!query) return;
+    const proto = Object.getPrototypeOf(query);
+    if (typeof proto.setData !== "function" || proto.setData.__codexPlusUsagePublication) return;
+    const original = proto.setData;
+    function codexPlusPublishUsageData(data, ...rest) {
+      if (!isMainRateLimitQueryKey(this?.queryKey)) return original.call(this, data, ...rest);
+      const raw = officialUsageRuntime.rawPayloads.get(data) || data;
+      const next = officialUsageRuntime.rewrite(data);
+      const previousPublication = officialUsageRuntime.pendingPublications.get(this);
+      const publication = { raw };
+      officialUsageRuntime.pendingPublications.set(this, publication);
+      officialUsageRuntime.rewriteDepth += 1;
+      try {
+        const stored = original.call(this, next, ...rest);
+        // TanStack 结构共享可能返回另一对象；快照绑定实际缓存对象，不绑定输入副本。
+        // 若订阅者已嵌套发布更新，沿用它登记的快照，不能用外层旧值覆盖。
+        if (publication.raw === raw && stored && typeof stored === "object") {
+          if (next !== raw) {
+            officialUsageRuntime.rawPayloads.set(stored, raw);
+            officialUsageRuntime.payloadPolicies.set(stored, officialUsagePolicyKey());
+          } else {
+            officialUsageRuntime.rawPayloads.delete(stored);
+            officialUsageRuntime.payloadPolicies.delete(stored);
+          }
+        }
+        if (previousPublication) previousPublication.raw = publication.raw;
+        return stored;
+      } finally {
+        officialUsageRuntime.rewriteDepth -= 1;
+        if (previousPublication) officialUsageRuntime.pendingPublications.set(this, previousPublication);
+        else officialUsageRuntime.pendingPublications.delete(this);
+      }
+    }
+    codexPlusPublishUsageData.__codexPlusUsagePublication = true;
+    proto.setData = codexPlusPublishUsageData;
+  }
+
+  function patchOfficialUsageQueryClient(client) {
+    if (!client || typeof client.setQueryData !== "function") return;
+    patchOfficialUsageQueryPublication(client);
+    if (client.__codexPlusUsageRewrite) return;
+    const original = client.setQueryData;
+    client.setQueryData = function codexPlusSetUsageQueryData(queryKey, updater, ...rest) {
+      if (!isMainRateLimitQueryKey(queryKey)) {
+        return original.call(this, queryKey, updater, ...rest);
+      }
+      const nextUpdater = typeof updater === "function"
+        ? (previous) => {
+          // setData 的同步订阅者可能马上写回，此时结构共享对象尚未返回。
+          const query = this.getQueryCache?.()?.find?.({ queryKey, exact: true });
+          const publishing = query && officialUsageRuntime.pendingPublications.get(query);
+          const raw = publishing ? publishing.raw : (officialUsageRuntime.rawPayloads.get(previous) || previous);
+          return officialUsageRuntime.rewrite(updater(raw));
+        }
+        : officialUsageRuntime.rewrite(updater);
+      officialUsageRuntime.rewriteDepth += 1;
+      try {
+        return original.call(this, queryKey, nextUpdater, ...rest);
+      } finally {
+        officialUsageRuntime.rewriteDepth -= 1;
+      }
     };
-    try {
-      const result = await postJson("/zed-remote/open", nextRequest);
-      if (result?.status === "ok") {
-        showZedRemoteToast("Opened in Zed Remote");
-        return;
-      }
-      showZedRemoteToast(result?.message || "Cannot open this file in Zed Remote");
-    } catch (error) {
-      showZedRemoteToast(error?.message || "Cannot open this file in Zed Remote");
+    const cache = client.getQueryCache?.();
+    if (cache && typeof cache.subscribe === "function") {
+      cache.subscribe((event) => {
+        if (officialUsageRuntime.rewriteDepth > 0) return;
+        const query = event?.query;
+        if (!isMainRateLimitQueryKey(query?.queryKey)) return;
+        const current = query.state?.data;
+        const next = officialUsageRuntime.rewrite(current);
+        if (next === current) return;
+        client.setQueryData(query.queryKey, next);
+      });
+    }
+    client.__codexPlusUsageRewrite = true;
+  }
+
+  function rewriteCachedOfficialUsage(client) {
+    if (!client || !officialUsagePolicy().official) return;
+    for (const query of mainRateLimitQueries(client)) {
+      const current = query.state?.data;
+      const next = officialUsageRuntime.rewrite(current);
+      if (next !== current) client.setQueryData(query.queryKey, next);
     }
   }
 
-  function removeZedRemoteButtons() {
-    document.querySelectorAll(`[data-codex-zed-remote-version]`).forEach((node) => {
-      delete node.dataset.codexZedRemoteVersion;
-    });
-    document.querySelectorAll(`.${zedRemoteButtonClass}`).forEach((node) => node.remove());
+  function invalidateMainRateLimitQueries(client) {
+    if (!client || typeof client.invalidateQueries !== "function") return;
+    for (const query of mainRateLimitQueries(client)) {
+      try {
+        Promise.resolve(client.invalidateQueries({ queryKey: query.queryKey, exact: true })).catch(() => {});
+      } catch {
+      }
+    }
   }
 
-  function createZedRemoteOpenInMenuItem(referenceItem) {
-    const item = document.createElement("div");
-    item.className = referenceItem?.className || "no-drag text-token-foreground outline-hidden rounded-lg px-[var(--padding-row-x)] py-[var(--padding-row-y)] text-sm group hover:bg-token-list-hover-background focus:bg-token-list-hover-background cursor-interaction flex flex-col";
-    item.classList.add(zedRemoteOpenInMenuItemClass);
-    item.setAttribute("role", referenceItem?.getAttribute("role") || "menuitem");
-    item.setAttribute("tabindex", referenceItem?.getAttribute("tabindex") || "-1");
-    item.setAttribute("data-orientation", referenceItem?.getAttribute("data-orientation") || "vertical");
-    item.innerHTML = `
-      <div class="flex w-full items-center gap-1.5">
-        <span class="inline-flex size-[18px] items-center justify-center leading-none shrink-0 opacity-75 group-focus:opacity-100 group-hover:opacity-100">
-          <img alt="" class="codex-zed-open-in-menu-icon icon-sm" src="apps/zed.png">
-        </span>
-        <span class="flex-1 min-w-0 truncate">Zed</span>
-      </div>
-    `;
-    bindZedRemoteOpenInMenuItem(item, "injected");
-    return item;
-  }
+  let officialUsagePolicyApplied = "";
+  let officialUsageClientTimer = null;
 
-  function zedRemoteOpenInMenuActivationIsDuplicate(target) {
-    if (!(target instanceof HTMLElement)) return false;
-    const now = Date.now();
-    const activatedAt = Number(target.dataset.codexZedOpenInMenuActivatedAt || 0);
-    if (activatedAt && now - activatedAt < zedRemoteOpenInMenuActivationWindowMs) return true;
-    target.dataset.codexZedOpenInMenuActivatedAt = String(now);
-    return false;
-  }
-
-  async function activateZedRemoteOpenInMenuItem(event) {
-    if (!codexPlusSettings().zedRemoteOpen) return;
-    if (event?.type === "keydown" && !["Enter", " "].includes(event.key)) return;
-    const scope = event?.currentTarget?.closest?.('[role="menu"], [data-radix-popper-content-wrapper]') || event?.currentTarget || document;
-    event.preventDefault();
-    event.stopPropagation();
-    event.stopImmediatePropagation?.();
-    if (zedRemoteOpenInMenuActivationIsDuplicate(event?.currentTarget)) return;
-    const request = zedRemoteBestOpenRequest(scope) || await resolveZedRemoteFallbackRequest();
-    if (!request) {
-      showZedRemoteToast("Cannot find a remote workspace or file for Zed");
+  function syncOfficialUsagePolicy() {
+    const key = officialUsagePolicyKey();
+    syncOfficialUsageWindowMode(key);
+    const client = findCodexQueryClient();
+    if (client) {
+      officialUsageClient = client;
+      patchOfficialUsageQueryClient(client);
+      if (officialUsageClientTimer) {
+        clearTimeout(officialUsageClientTimer);
+        officialUsageClientTimer = null;
+      }
+    } else if (!officialUsageClientTimer) {
+      let attempts = 0;
+      const retry = () => {
+        attempts += 1;
+        officialUsageClientTimer = null;
+        if (findCodexQueryClient()) {
+          syncOfficialUsagePolicy();
+          return;
+        }
+        if (attempts < 20) officialUsageClientTimer = setTimeout(retry, 300);
+      };
+      officialUsageClientTimer = setTimeout(retry, 300);
+      return;
+    } else {
       return;
     }
-    openZedRemote(request);
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
-  }
-
-  function bindZedRemoteOpenInMenuItem(item, source) {
-    item.setAttribute("data-codex-zed-open-in-menu", source);
-    if (item.dataset.codexZedOpenInMenuBound === zedRemoteOpenInMenuVersion) return;
-    item.dataset.codexZedOpenInMenuBound = zedRemoteOpenInMenuVersion;
-    item.dataset.codexZedOpenInMenuVersion = zedRemoteOpenInMenuVersion;
-    item.addEventListener("pointerup", activateZedRemoteOpenInMenuItem, true);
-    item.addEventListener("click", activateZedRemoteOpenInMenuItem, true);
-    item.addEventListener("keydown", activateZedRemoteOpenInMenuItem, true);
-  }
-
-  function removeZedRemoteOpenInMenuItems(scope = document) {
-    const root = scope?.querySelectorAll ? scope : document;
-    root.querySelectorAll(`.${zedRemoteOpenInMenuItemClass}, [data-codex-zed-open-in-menu="injected"]`).forEach((node) => node.remove());
-  }
-
-  function zedRemoteOpenInMenuScopes(scope = document) {
-    const root = scope?.querySelectorAll ? scope : document;
-    const menus = [];
-    if (scope instanceof HTMLElement && scope.matches?.('[role="menu"]')) menus.push(scope);
-    root.querySelectorAll?.('[role="menu"]').forEach((menu) => menus.push(menu));
-    return Array.from(new Set(menus));
-  }
-
-  function refreshZedRemoteOpenInMenus(scope = document) {
-    removeZedRemoteOpenInMenuItems(scope);
-    if (!codexPlusSettings().zedRemoteOpen) return;
-    const fallbackPayload = zedRemoteCurrentFallbackPayload();
-    zedRemoteOpenInMenuScopes(scope).forEach((menu) => {
-      if (!(menu instanceof HTMLElement) || isExtensionUiNode(menu)) return;
-      const items = Array.from(menu.querySelectorAll('[role="menuitem"]')).filter((item) => !isExtensionUiNode(item));
-      const menuText = items.map((item) => (item.textContent || "").trim()).join(" ");
-      if (!/\b(VS Code|Cursor|Antigravity)\b/.test(menuText)) return;
-      if (!zedRemoteBestOpenRequest(menu) && !zedRemoteIsRemoteHostId(fallbackPayload.hostId)) return;
-      const existingZedItem = items.find((item) => (item.textContent || "").trim() === "Zed");
-      if (existingZedItem) {
-        bindZedRemoteOpenInMenuItem(existingZedItem, "native");
-        return;
+    const recoveredHomeReads = window.__codexPlusComposerReadiness?.tick(client, officialUsagePolicy().unlockSend) || 0;
+    if (recoveredHomeReads > 0) {
+      sendCodexPlusDiagnostic("composer_home_read_retried", { count: recoveredHomeReads });
+    }
+    if (key === officialUsagePolicyApplied) {
+      if (key !== "off") rewriteCachedOfficialUsage(client);
+      return;
+    }
+    const previous = officialUsagePolicyApplied;
+    officialUsagePolicyApplied = key;
+    if (key === "off") {
+      // 先同步恢复真实用量；断网或刷新悬挂时也不能沿用混入模式的解锁结果。
+      for (const query of mainRateLimitQueries(client)) {
+        const raw = officialUsageRuntime.rawPayloads.get(query.state?.data);
+        if (raw) client.setQueryData(query.queryKey, raw);
       }
-      const referenceItem = items.find((item) => /^(VS Code|Cursor|Antigravity)$/.test((item.textContent || "").trim()));
-      if (!referenceItem) return;
-      referenceItem.parentElement?.appendChild(createZedRemoteOpenInMenuItem(referenceItem));
-    });
+      if (previous) invalidateMainRateLimitQueries(client);
+      return;
+    }
+    rewriteCachedOfficialUsage(client);
+    if (previous) invalidateMainRateLimitQueries(client);
+  }
+
+  if (window.__CODEX_PLUS_TEST_RATE_LIMIT_UNLOCK__) {
+    window.__codexPlusRateLimitUnlockTest = {
+      setBackendSettings: (settings) => {
+        codexPlusBackendSettings = { ...codexPlusBackendSettings, ...settings };
+        codexPlusBackendSettingsLoaded = true;
+      },
+      setHideAlerts: (hidden) => {
+        window.__CODEX_PLUS_HIDE_OFFICIAL_USAGE_ALERT__ = hidden === true;
+      },
+      install: () => syncOfficialUsagePolicy(),
+      policyKey: () => officialUsagePolicyKey(),
+      isRateLimitQueryKey: (queryKey) => isMainRateLimitQueryKey(queryKey),
+      rewrite: (value) => rewriteOfficialUsagePayload(value),
+    };
   }
 
   function sessionCopyMenuRow(menu) {
@@ -10441,57 +9689,6 @@
     });
   }
 
-  async function refreshZedRemoteOpenControls(scope = document) {
-    if (!codexPlusSettings().zedRemoteOpen) {
-      removeZedRemoteButtons();
-      removeZedRemoteOpenInMenuItems();
-      return;
-    }
-    try {
-      const status = await loadZedRemoteStatus();
-      if (!status?.platformSupported || (!status.zedAppFound && !status.zedCliFound)) {
-        removeZedRemoteButtons();
-        removeZedRemoteOpenInMenuItems();
-        return;
-      }
-    } catch (_) {
-      removeZedRemoteButtons();
-      removeZedRemoteOpenInMenuItems();
-      return;
-    }
-    refreshZedRemoteOpenInMenus(scope);
-  }
-
-  function runScheduledZedRemoteMenuRefresh() {
-    window.__codexZedRemoteMenuRefreshPending = false;
-    clearTimeout(window.__codexZedRemoteMenuRefreshTimer);
-    window.__codexZedRemoteMenuRefreshTimer = null;
-    refreshZedRemoteOpenControls().catch(() => {
-      removeZedRemoteOpenInMenuItems();
-    });
-  }
-
-  function shouldRefreshZedRemoteMenus(mutations) {
-    if (!codexPlusSettings().zedRemoteOpen) return false;
-    if (!mutations) return true;
-    return mutations.some((mutation) => {
-      const target = mutation.target;
-      if (isExtensionUiNode(target)) return false;
-      if (target?.nodeType === 1 && target.matches?.('[role="menu"], [data-radix-popper-content-wrapper]')) return true;
-      return [...Array.from(mutation.addedNodes), ...Array.from(mutation.removedNodes)].some((node) => node.nodeType === 1 && (
-        node.matches?.('[role="menu"], [data-radix-popper-content-wrapper]') ||
-        node.querySelector?.('[role="menu"], [data-radix-popper-content-wrapper]')
-      ));
-    });
-  }
-
-  function scheduleZedRemoteMenuRefresh(mutations) {
-    if (!shouldRefreshZedRemoteMenus(mutations)) return;
-    if (window.__codexZedRemoteMenuRefreshPending) return;
-    window.__codexZedRemoteMenuRefreshPending = true;
-    window.__codexZedRemoteMenuRefreshTimer = setTimeout(runScheduledZedRemoteMenuRefresh, 50);
-  }
-
   function scanDeferred() {
     if (pluginPatchDisabledInRelayMode()) {
       clearPluginPatchArtifacts();
@@ -10513,7 +9710,6 @@
         }
       }
     }
-    refreshDreamSkin();
     refreshThreadIdBadges();
     sessionRows().forEach(tryAttachButton);
     updateDeleteButtonOffsets();
@@ -10541,13 +9737,12 @@
   }
 
   function isExtensionUiNode(node) {
-    return !!node?.closest?.(`.codex-delete-toast, .codex-delete-confirm-overlay, .codex-plus-modal-overlay, .${codexPlusPageClass}, #${codexPlusSidebarNavId}, .${codexServiceTierBadgeClass}, .${sessionShareButtonClass}, .codex-zed-remote-button, .codex-zed-remote-toast, .${sessionCopyMenuItemClass}, #codex-plus-menu`);
+    return !!node?.closest?.(`.codex-delete-toast, .codex-delete-confirm-overlay, .codex-plus-modal-overlay, .${codexPlusPageClass}, #${codexPlusSidebarNavId}, .${codexServiceTierBadgeClass}, .${sessionShareButtonClass}, .${sessionCopyMenuItemClass}, #codex-plus-menu`);
   }
 
   function scanRelevantSelector() {
     return [
       selectors.sidebarThread,
-      'aside.app-shell-left-panel [role="status"][aria-live="polite"]',
       '[data-app-action-sidebar-section-heading="Chats"]',
       '[data-app-action-sidebar-section-heading="Projects"]',
       '[data-codex-archive-page-row="true"]',
@@ -10615,7 +9810,6 @@
 
   function scheduleScan(mutations) {
     window.__codexSessionDeleteLastMutations = mutations;
-    scheduleZedRemoteMenuRefresh(mutations);
     if (!shouldScheduleScan(mutations)) return;
     if (window.__codexSessionDeleteScanPending) return;
     window.__codexSessionDeleteScanPending = true;
@@ -10656,6 +9850,7 @@
   installUpstreamBranchDropdownAdapter();
   installUpstreamWorktreeNativeAdapter();
   scan();
+  syncOfficialUsagePolicy();
   scheduleSidebarNavStartupRetry();
   window.removeEventListener("resize", window.__codexPlusResizeHandler);
   let codexPlusResizeRafId = 0;

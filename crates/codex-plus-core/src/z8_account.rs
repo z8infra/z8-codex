@@ -1663,6 +1663,7 @@ fn decode_envelope(
 fn map_api_error(object: &Map<String, Value>, fallback: AccountError) -> AccountError {
     let reason = api_error_reason(object).unwrap_or_default();
     let mapped = match reason {
+        "INVALID_CREDENTIALS" => AccountErrorCode::InvalidCredentials,
         "TOKEN_REVOKED"
         | "USER_NOT_ACTIVE"
         | "SESSION_BINDING_MISMATCH"
@@ -2470,6 +2471,13 @@ mod tests {
 
     #[test]
     fn maps_server_reason_to_stable_error_code() {
+        let invalid_credentials = map_api_error(
+            json!({"reason":"INVALID_CREDENTIALS"}).as_object().unwrap(),
+            AccountError::new(AccountErrorCode::RequestFailed, "fallback"),
+        );
+        assert_eq!(invalid_credentials.code(), AccountErrorCode::InvalidCredentials);
+        assert_eq!(invalid_credentials.stable_code(), "account_invalid_credentials");
+
         let error = map_api_error(
             json!({"reason":"EMAIL_EXISTS"}).as_object().unwrap(),
             AccountError::new(AccountErrorCode::Conflict, "fallback"),

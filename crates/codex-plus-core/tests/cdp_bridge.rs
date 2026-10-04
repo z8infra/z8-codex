@@ -62,15 +62,16 @@ fn screenshot_command_uses_png_from_surface() {
 fn injection_script_prefixes_helper_url_and_metadata() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("!window.electronBridge"));
+    assert!(!script.contains("!window.electronBridge"));
+    assert!(script.contains("The preload bridge is installed after document-start scripts."));
     assert!(script.contains(r#"!/^app:\/\/\-\//i.test(window.location.href)"#));
     assert!(script.contains("window.__CODEX_SESSION_DELETE_HELPER__"));
     assert!(script.contains("http://127.0.0.1:57321"));
     assert!(!script.contains("window.__CODEX_PLUS_SPONSOR_IMAGES__"));
     assert!(script.contains("window.__CODEX_PLUS_VERSION__"));
     assert!(script.contains(codex_plus_core::version::VERSION));
-    assert!(script.contains("https://discord.gg/y96kX7A76v"));
-    assert!(script.contains("data-codex-plus-discord"));
+    assert!(!script.contains("discord.gg"));
+    assert!(!script.contains("data-codex-plus-discord"));
 }
 
 /// 注入永远早于 Codex 渲染左侧面板：注入时 readyState 已是 complete，但
@@ -610,13 +611,20 @@ fn official_login_usage_alert_setting_controls_renderer_injection() {
 }
 
 #[test]
-fn usage_alert_hider_uses_sidebar_semantics_instead_of_percentage_copy() {
+fn usage_alert_policy_rewrites_before_publication_and_observes_opted_in_prompts() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("officialUsageAlertCards"));
-    assert!(script.contains("progress[max=\"100\"]"));
-    assert!(script.contains("dismiss usage alert|关闭使用量提醒"));
-    assert!(script.contains("codexPlusUsageAlertHidden"));
+    assert!(script.contains("function syncOfficialUsagePolicy()"));
+    assert!(script.contains("function codexPlusPublishUsageData("));
+    assert!(script.contains("function syncOfficialUsageWindowMode("));
+    assert!(script.contains("window.__codexPlusComposerReadiness?.tick(client, officialUsagePolicy().unlockSend)"));
+    assert!(!script.contains("installExternalApiQuotaGate"));
+    assert!(!script.contains("__codexPlusApiQuotaBreakpoint"));
+    assert!(script.contains("queryKey[1] !== \"image-generation\""));
+    assert!(script.contains("image_generation_limit_reached"));
+    assert!(!script.contains("officialUsageAlertCards"));
+    assert!(!script.contains("refreshOfficialUsageAlertVisibility"));
+    assert!(!script.contains("codex-plus-hide-usage-alert"));
 }
 
 #[test]
@@ -660,161 +668,16 @@ fn rejects_cdp_websocket_with_wrong_scheme_or_missing_port() {
 }
 
 #[test]
-fn injection_script_installs_dream_skin_from_backend_settings() {
-    let mut settings = codex_plus_core::settings::BackendSettings {
-        codex_app_dream_skin_enabled: true,
-        codex_app_dream_skin_paused: false,
-        codex_app_dream_skin_theme_config: codex_plus_core::settings::DreamSkinThemeConfig {
-            name: "Upstream Theme".to_string(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    settings
-        .codex_app_dream_skin_theme_config
-        .extra_fields
-        .insert(
-            "companion".to_string(),
-            serde_json::json!({
-                "dataUrl": "data:image/webp;base64,UklGRg==",
-                "width": 96,
-                "side": "right"
-            }),
-        );
-    let script = assets::injection_script_with_settings(57321, &settings);
+fn injection_script_ignores_retired_hidden_feature_settings() {
+    let script = assets::injection_script(57321);
 
-    assert!(script.contains("dreamSkinEnabled: \"codexAppDreamSkinEnabled\""));
-    assert!(script.contains("dreamSkinPaused: \"codexAppDreamSkinPaused\""));
-    assert!(script.contains("dreamSkinThemeConfig: \"codexAppDreamSkinThemeConfig\""));
-    assert!(script.contains("dreamSkinImagePath: \"codexAppDreamSkinImagePath\""));
-    assert!(!script.contains("window.__CODEX_PLUS_DREAM_SKIN_STYLES__ ="));
-    assert!(!script.contains("window.__CODEX_PLUS_DREAM_SKIN_CSS__"));
-    assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_PLATFORM__"));
-    assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_REVISION__"));
-    assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_ART__"));
-    assert!(script.contains(if cfg!(windows) {
-        "data:image/jpeg;base64,"
-    } else {
-        "data:image/png;base64,"
-    }));
-    assert!(script.contains("codex-dream-skin-style"));
-    assert!(script.contains("codex-dream-skin-chrome"));
-    assert!(script.contains("URL.createObjectURL(new Blob"));
-    assert!(script.contains("URL.revokeObjectURL(state.artUrl)"));
-    assert!(!script.contains("/dream-skin/image?v="));
-    assert!(script.contains("window.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ = true"));
-    assert!(script.contains("window.__CODEX_PLUS_CLEAR_DREAM_SKIN__?.();"));
-    assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__"));
-    assert!(script.contains("state.version = `codex-plus:"));
-    assert!(!script.contains("state.observer?.disconnect?.()"));
-    assert!(!script.contains("if (state.timer) clearInterval(state.timer)"));
-    assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_PAYLOAD_SIGNATURE__"));
-    assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_THEME__"));
-    assert!(script.contains("data:image/webp;base64,UklGRg=="));
-    assert!(script.contains("codex-dream-skin-companion"));
-    assert!(script.contains("removeDreamSkinCompanion"));
-    if cfg!(windows) {
-        assert!(script.contains("data-dream-skin=\\\"active\\\""));
-        assert!(!script.contains("薛凯琪专属定制皮肤"));
-    }
-    assert!(script.contains(".group\\\\/home-suggestions"));
-    assert!(script.contains("--dream-skin-art"));
-    assert!(script.contains("--dream-art"));
-    assert!(script.contains("function refreshDreamSkin()"));
-    assert!(script.contains(
-        "codexPlusBackendSettingsLoaded && (!settings.dreamSkinEnabled || settings.dreamSkinPaused)"
-    ));
-    assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__"));
-    assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__"));
-    assert!(!script.contains(
-        "attributeFilter: [\"class\", \"data-theme\", \"data-appearance\", \"data-color-mode\", \"style\"]"
-    ));
-    assert!(script.contains("codexAppDreamSkinEnabled"));
-    assert!(script.contains("codexAppDreamSkinPaused"));
-    assert!(script.contains("codexAppDreamSkinThemeConfig"));
-    assert!(script.contains("Upstream Theme"));
-    assert!(script.contains("codexAppDreamSkinImagePath"));
-    assert!(script.contains("const STATE_KEY = \"__CODEX_DREAM_SKIN_STATE__\""));
-    assert!(!script.contains("artDataUrl.slice(-64)"));
-    assert!(!script.contains("luckyGod:"));
-}
-
-#[test]
-fn dream_skin_live_update_script_excludes_the_full_renderer_runtime() {
-    let settings = codex_plus_core::settings::BackendSettings {
-        codex_app_dream_skin_enabled: true,
-        codex_app_dream_skin_theme_config: codex_plus_core::settings::DreamSkinThemeConfig {
-            name: "Lightweight Theme".to_string(),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let probe = assets::dream_skin_live_update_probe_script();
-    let update = assets::dream_skin_live_update_script(&settings, true);
-    let metadata_only_update = assets::dream_skin_live_update_script(&settings, false);
-    let full = assets::injection_script_with_settings(57321, &settings);
-
-    assert!(probe.contains("__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__"));
-    assert!(probe.contains("payloadSignature"));
-    assert!(probe.contains("__CODEX_DREAM_SKIN_STATE__"));
-    assert!(probe.contains("__CODEX_GLASS_VISION_SKIN_STATE__"));
-    assert!(update.contains("Lightweight Theme"));
-    assert!(update.contains("__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__"));
-    assert!(update.contains(if cfg!(windows) {
-        "data:image/jpeg;base64,"
-    } else {
-        "data:image/png;base64,"
-    }));
-    assert!(!metadata_only_update.contains("base64,"));
-    assert!(!update.contains("__CODEX_PLUS_SPONSOR_IMAGES__"));
-    assert!(!update.contains("__codexSessionDeleteObserver"));
-    assert!(!update.contains("function refreshDreamSkin()"));
-    assert!(metadata_only_update.len() < full.len());
-}
-
-#[test]
-fn dream_skin_style_presets_select_their_original_target_engines() {
-    for (id, expected_engine) in [
-        ("caishen-lite", "dream-skin"),
-        ("preset-midnight-aurora", "cidala-tiger"),
-        ("codex-snow-skin", "snow"),
-        ("glass-vision", "glass-vision"),
-    ] {
-        let settings = codex_plus_core::settings::BackendSettings {
-            codex_app_dream_skin_enabled: true,
-            codex_app_dream_skin_theme_config: codex_plus_core::settings::DreamSkinThemeConfig {
-                id: id.to_string(),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let script = assets::dream_skin_live_update_script(&settings, true);
-
-        assert!(
-            script.contains(&format!(
-                "window.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__ = \"{expected_engine}\""
-            )),
-            "wrong target engine for {id}"
-        );
-        assert!(!script.contains("__DREAM_"));
-        assert!(!script.contains("__GLASS_VISION_"));
-    }
-}
-
-#[test]
-fn dream_skin_bundles_a_real_default_image() {
-    let (content_type, image) = assets::dream_skin_default_image();
-
-    if cfg!(windows) {
-        assert_eq!(content_type, "image/jpeg");
-        assert!(image.len() > 600_000);
-        assert_eq!(&image[..3], b"\xFF\xD8\xFF");
-    } else {
-        assert_eq!(content_type, "image/png");
-        assert!(image.len() > 1_000_000);
-        assert_eq!(&image[..8], b"\x89PNG\r\n\x1a\n");
-    }
+    assert!(!script.contains("codexAppDreamSkinEnabled"));
+    assert!(!script.contains("__CODEX_PLUS_DREAM_SKIN"));
+    assert!(!script.contains("codex-zed-remote"));
+    assert!(!script.contains("BigPizzaV3/Ad-List"));
+    assert!(!script.contains("/user-scripts/"));
+    assert!(script.contains("__CODEX_PLUS_HIDE_OFFICIAL_USAGE_ALERT__"));
+    assert!(script.contains("__codexPlusComposerReadiness"));
 }
 
 #[test]
@@ -828,12 +691,13 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
 }
 
 #[test]
-fn injection_script_does_not_fetch_advertising_content() {
+fn injection_script_does_not_fetch_retired_ads() {
     let script = assets::injection_script(57321);
 
+    assert!(!script.contains("directFetchCodexPlusAds"));
     assert!(!script.contains("BigPizzaV3/Ad-List"));
-    assert!(!script.contains("codexPlusAds"));
-    assert!(!script.contains("/ads"));
+    assert!(!script.contains("fetchCodexPlusAds"));
+    assert!(script.contains("Z8 Codex"));
 }
 
 #[test]
@@ -863,7 +727,7 @@ fn injection_script_keeps_one_backend_heartbeat_per_generation() {
         .find("function scheduleBackendHeartbeat()")
         .expect("backend heartbeat scheduler should exist");
     let end = script[start..]
-        .find("\n  function userScriptStatusLabel")
+        .find("\n  function selectCodexPlusTab")
         .map(|offset| start + offset)
         .expect("backend heartbeat scheduler should have an end marker");
     let scheduler = &script[start..end];
@@ -3252,6 +3116,11 @@ fn injection_script_applies_fast_service_tier_contract() {
         "priority"
     );
     assert_eq!(cases["solFastAvailability"]["supported"], true);
+    for model in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] {
+        assert_eq!(cases["gpt6Fast"][model]["supported"], true);
+        assert_eq!(cases["gpt6Fast"][model]["request"]["serviceTier"], "priority");
+        assert_eq!(cases["gpt6Fast"][model]["request"]["service_tier"], "priority");
+    }
     assert_eq!(cases["solDescriptor"]["defaultReasoningEffort"], "low");
     assert_eq!(
         cases["solDescriptor"]["supportedReasoningEfforts"][4]["reasoningEffort"],
@@ -3547,6 +3416,13 @@ api.setModelCatalog({{
   }},
 }});
 const solFastAvailability = api.fastAvailability("gpt-5.6-sol");
+const gpt6Fast = Object.fromEntries(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].map((model) => [
+  model,
+  {{
+    supported: api.fastAvailability(model).supported,
+    request: api.applyServiceTierOverride("turn/start", {{ threadId: "thread-12345678", model, service_tier: null }}),
+  }},
+]));
 api.setModelCatalog({{
   status: "ok",
   model: "gpt-5.6-sol",
@@ -4088,6 +3964,7 @@ process.stdout.write(JSON.stringify({{
   fetchStartConversation,
   fetchSendCliRequest,
   solFastAvailability,
+  gpt6Fast,
   solDescriptor,
   dispatcherFromSingleton,
   dispatcherFromCurrentSingleton,
@@ -4204,6 +4081,7 @@ fn injection_script_restores_thread_scroll_positions() {
     assert!(script.contains("codexThreadScroll"));
     assert!(script.contains("installThreadScrollRouteHooks"));
     assert!(script.contains("scheduleThreadScrollSync"));
+    assert!(script.contains("localStorage.removeItem(codexThreadScrollKey)"));
 }
 
 #[test]
@@ -4368,6 +4246,7 @@ fn bridge_health_check_script_uses_persisted_real_probe_result() {
     assert!(script.contains("__codexPlusBridgeHealth"));
     assert!(script.contains("lastSuccessAt"));
     assert!(script.contains("lastInjectionAt"));
+    assert!(script.contains("lastAttemptAt"));
     assert!(!script.contains("/backend/status"));
 }
 
@@ -4389,6 +4268,8 @@ if (run({{ lastInjectionAt: 0, lastSuccessAt: now }}) !== true) process.exit(2);
 if (run({{ lastInjectionAt: now, lastSuccessAt: 0 }}) !== true) process.exit(3);
 if (run({{ lastInjectionAt: now - 6000, lastSuccessAt: 0 }}) !== false) process.exit(4);
 if (run({{ lastInjectionAt: 1, lastSuccessAt: now - 16000 }}) !== false) process.exit(5);
+if (run({{ lastInjectionAt: 0, lastSuccessAt: 0, lastAttemptAt: now }}) !== true) process.exit(7);
+if (run({{ lastInjectionAt: 1, lastSuccessAt: now - 16000, lastAttemptAt: now - 16000 }}) !== false) process.exit(8);
 if (run({{ lastInjectionAt: now, lastSuccessAt: now }}, false) !== false) process.exit(6);
 "#,
         script = script

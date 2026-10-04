@@ -279,6 +279,21 @@ test("recheck after a failed install reaches the ready state without another ins
   })), /登录 \/ 创建账户/);
 });
 
+test("post-install host mismatch preserves the native installation guidance", async () => {
+  const message = "Windows 安装命令已结束，但当前用户仍未检测到 Codex 桌面版。";
+  const flow = new HostInstallFlow({
+    invoke: async <T,>(command: string) => {
+      if (command === "z8_host_status") return missingHost as T;
+      return { status: "ok", installed: true, message } as T;
+    },
+    listenProgress: async () => () => {},
+  });
+  await flow.check(true);
+  assert.equal(await flow.install(), false);
+  assert.equal(flow.getState().phase, "failed");
+  assert.equal(flow.getState().error, message);
+});
+
 test("dialog keeps an accessible focus target even while installation is busy", () => {
   for (const phase of ["idle", "download", "failed", "complete"] as const) {
     const html = renderToStaticMarkup(HostInstallDialog({

@@ -3,18 +3,97 @@ import { describe, it } from "node:test";
 import { isValidAutoCompactPercent, normalizeAutoCompactEditing, normalizeAutoCompactPercent } from "./auto-compact.ts";
 import {
   clearModelMetadataForSlug,
+  modelMetadataKey,
+  modelSlugFromRowName,
   parseModelMetadataDocument,
   parseModelMetadataMap,
   remapModelMetadataSlugs,
   replaceModelMetadataForSlug,
   retainModelMetadataForSlugs,
   serializeModelMetadataDocument,
+  suffixWindowString,
   synchronizeModelMetadataDocumentContextWindow,
   synchronizeModelMetadataDocumentLimits,
   synchronizeModelMetadataDocumentLimitsPreview,
 } from "./model-metadata.ts";
 
 describe("model metadata helpers", () => {
+  it("模型后缀与 Rust 一致且无效后缀不会改变身份", () => {
+    for (const [row, slug, window] of [
+      [" GPT-6.1-Sol[1M] ", "GPT-6.1-Sol", "1000000"],
+      ["Model-X[256k]", "Model-X", "256000"],
+      ["Model-X[ +256 K ]", "Model-X", "256000"],
+      ["Model-X[18446744073709551615]", "Model-X", "18446744073709551615"],
+      ["Model-X[18446744073709551616]", "Model-X[18446744073709551616]", null],
+      ["Model-X[0]", "Model-X[0]", null],
+      ["Model-X[bad]", "Model-X[bad]", null],
+      [" [1M] ", "[1M]", null],
+    ] as const) {
+      assert.strictEqual(modelSlugFromRowName(row), slug);
+      assert.strictEqual(suffixWindowString(row), window);
+    }
+    assert.strictEqual(modelMetadataKey("GPT-6.1-Sol[1M]"), "gpt-6.1-sol");
+    assert.strictEqual(modelMetadataKey("ÄBC"), "Äbc");
+  });
+
+  it("大小写与后缀变体共用 metadata key，旧配置最后一条生效", () => {
+    const value = '{"Model-X":{"description":"old"},"model-x[512K]":{"description":"latest"}}';
+    assert.deepStrictEqual(parseModelMetadataMap(value), { "model-x": { description: "latest" } });
+    assert.deepStrictEqual(parseModelMetadataMap('{"model-x":{"description":"first"},"MODEL-X":{"description":"middle"},"model-x":{"description":"last"}}'), {
+      "model-x": { description: "middle" },
+    });
+    assert.deepStrictEqual(parseModelMetadataMap('{"1[1M]":{"description":"first"},"1":{"description":"last"}}'), {
+      "1": { description: "first" },
+    });
+    assert.deepStrictEqual(parseModelMetadataMap('{"model-x":{"description":"old"},"MODEL-X":{}}'), {});
+    assert.deepStrictEqual(parseModelMetadataMap('{"model-x":{},"MODEL-X":{"description":"latest"}}'), {
+      "model-x": { description: "latest" },
+    });
+    assert.deepStrictEqual(JSON.parse(retainModelMetadataForSlugs(value, ["MODEL-X[1M]"])), {
+      "model-x": { description: "latest" },
+    });
+    const updated = replaceModelMetadataForSlug(value, "Model-X[1M]", { description: "updated" });
+    assert.deepStrictEqual(JSON.parse(updated), { "model-x": { description: "updated" } });
+    assert.strictEqual(clearModelMetadataForSlug(updated, "MODEL-X[256K]"), "");
+    assert.deepStrictEqual(JSON.parse(remapModelMetadataSlugs(value, [
+      { previousSlug: "MODEL-X[512K]", nextSlug: "Model-Y[1M]" },
+    ])), { "model-y": { description: "latest" } });
+  });
+
+  it("已有显示名在大小写变体导入后保留", () => {
+    const saved = replaceModelMetadataForSlug('{"Model-X":{"display_name":"User title"}}', "MODEL-X[1M]", {
+      display_name: "Vendor title", description: "Imported",
+    });
+    assert.deepStrictEqual(JSON.parse(saved), {
+      "model-x": { display_name: "User title", description: "Imported" },
+    });
+  });
+
+  it("导入与双向同步匹配无后缀模型，同时保持用户模型拼写", () => {
+    const source = '{"slug":"model-x","context_window":1000000,"auto_compact_token_limit":800000,"description":"vendor"}';
+    const parsed = parseModelMetadataDocument(source, "Model-X[1M]");
+    assert.strictEqual(parsed.ok, true);
+    if (!parsed.ok) return;
+    assert.strictEqual(parsed.value.slug, "Model-X");
+    assert.strictEqual(parsed.value.autoCompactPercent, "80%");
+    const synchronized = synchronizeModelMetadataDocumentLimitsPreview(source, "Model-X[1M]", "512K", "90%");
+    assert.ok(synchronized);
+    assert.strictEqual(JSON.parse(synchronized.document).slug, "model-x");
+    assert.strictEqual(synchronized.preview.contextWindow, "512000");
+    assert.strictEqual(synchronized.preview.autoCompactPercent, "90%");
+    const serialized = JSON.parse(serializeModelMetadataDocument("Model-X[1M]", parsed.value.metadata, "1M"));
+    assert.strictEqual(serialized.models[0].slug, "Model-X");
+    assert.strictEqual(parseModelMetadataDocument(JSON.stringify(serialized), "Model-X[1M]").ok, true);
+  });
+
+  it("大小写重复模型仍报歧义且不会任意选中", () => {
+    const source = '{"models":[{"slug":"model-x"},{"slug":"MODEL-X"}]}';
+    const parsed = parseModelMetadataDocument(source, "Model-X[1M]");
+    assert.strictEqual(parsed.ok, false);
+    if (!parsed.ok) assert.match(parsed.error, /多个 slug/);
+    assert.strictEqual(synchronizeModelMetadataDocumentLimits(source, "Model-X[1M]", "1M", "90%"), null);
+  });
+
   it("自动压缩编辑把数字保持在百分号前并允许清空", () => {
     assert.strictEqual(normalizeAutoCompactEditing("90%5", "90%"), "905%");
     assert.strictEqual(normalizeAutoCompactEditing("9%", "90%"), "9");

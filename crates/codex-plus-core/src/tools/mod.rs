@@ -6,9 +6,7 @@
 //! （Grok / Claude Code / …）预留同名分片。迁移是纯增量的 —— 扁平字段不删、
 //! 不改名、继续序列化，所以老版本管理器读新文件照常工作。
 //!
-//! 每个工具的写盘适配放各自的子模块，见 [`grok`]。
-
-pub mod grok;
+//! 仅 Codex 具有活动适配器；历史工具分片作为惰性数据保留。
 
 use std::path::PathBuf;
 
@@ -119,7 +117,7 @@ pub const TOOL_CODEX_NAME: &str = "Codex";
 pub const TOOL_GROK_NAME: &str = "Grok";
 
 /// 已注册的工具，顺序即 UI 顶栏顺序。
-pub const REGISTERED_TOOLS: &[ToolId] = &[ToolId::Codex, ToolId::Grok];
+pub const REGISTERED_TOOLS: &[ToolId] = &[ToolId::Codex];
 
 pub fn tool_display_name(id: &ToolId) -> &'static str {
     match id {
@@ -133,7 +131,7 @@ pub fn tool_display_name(id: &ToolId) -> &'static str {
 pub fn tool_home_dir(id: &ToolId) -> PathBuf {
     match id {
         ToolId::Codex => crate::relay_config::default_codex_home_dir(),
-        ToolId::Grok => crate::grok_config::default_grok_home_dir(),
+        ToolId::Grok => crate::paths::default_app_state_dir(),
         // 未注册的工具没有已知 home，退回配置根目录，避免调用方拿到 panic。
         ToolId::Unknown(_) => crate::paths::default_app_state_dir(),
     }
@@ -141,7 +139,7 @@ pub fn tool_home_dir(id: &ToolId) -> PathBuf {
 
 /// 该工具的 profile 是否已经能真正写盘并切换。
 pub fn tool_is_switchable(id: &ToolId) -> bool {
-    matches!(id, ToolId::Codex | ToolId::Grok)
+    matches!(id, ToolId::Codex)
 }
 
 pub fn tool_specs() -> Vec<ToolSpec> {
@@ -313,8 +311,8 @@ mod tests {
         assert_eq!(specs[0].id, ToolId::Codex);
         assert_eq!(specs[0].name, TOOL_CODEX_NAME);
         assert!(specs[0].switchable);
-        assert_eq!(specs[1].id, ToolId::Grok);
-        assert!(specs[1].switchable);
+        assert_eq!(specs.len(), 1);
+        assert!(!tool_is_switchable(&ToolId::Grok));
         assert!(specs.iter().all(|spec| !spec.home_dir.is_empty()));
     }
 }

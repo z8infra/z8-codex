@@ -644,6 +644,158 @@ base_url = "https://responses.example.test/v1"
 }
 
 #[test]
+fn non_openai_session_renames_openai_provider_name_to_avoid_remote_compaction_v2() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut profile = RelayProfile {
+        id: "custom".to_string(),
+        relay_mode: RelayMode::MixedApi,
+        protocol: RelayProtocol::Responses,
+        base_url: "https://relay.example.test/v1".to_string(),
+        upstream_base_url: "https://relay.example.test/v1".to_string(),
+        api_key: "sk-test-redacted".to_string(),
+        config_contents: r#"model = "deepseek-v4-flash"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "OpenAI"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example.test/v1"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-test-redacted"}"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    // name = "OpenAI" 会让 codex 误判官方身份启用 v2 远程压缩（issue #2217），
+    // 非官方会话身份必须改写为中性名。
+    assert!(profile.config_contents.contains(r#"name = "custom""#));
+    assert!(!profile.config_contents.contains(r#"name = "OpenAI""#));
+    let _ = temp;
+}
+
+/// issue #1097 问题 2：live config 的 `model =` 被污染成整段转义后的供应商配置时，
+/// backfill 不得把脏值固化进 profile.model（否则随保存/切换逐轮转义放大）。
+#[test]
+fn backfill_rejects_polluted_model_line() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    std::fs::write(
+        home.join("config.toml"),
+        r#"model = "gpt-5.6-sol\n\nmodel_provider = \"custom\"\nbase_url = \"https://relay.example.test/v1\"\n"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+base_url = "https://relay.example.test/v1"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        home.join("auth.json"),
+        r#"{"OPENAI_API_KEY":"sk-test-redacted"}"#,
+    )
+    .unwrap();
+
+    let mut profile = RelayProfile::default();
+    backfill_relay_profile_from_home(home, &mut profile).unwrap();
+
+    assert!(profile.model.trim().is_empty());
+}
+
+/// issue #1097 问题 2：normalize 重写快照时剥掉/替换 config_contents 里被污染的
+/// `model =`，且多轮 normalize 幂等——修复前读侧不反转义，每轮写侧再转义一层，
+/// settings.json 会指数膨胀。
+#[test]
+fn normalize_drops_polluted_model_and_stays_idempotent() {
+    let polluted_config = r#"model = "gpt-5.6-sol\n\nmodel_provider = \"custom\"\nbase_url = \"https://relay.example.test/v1\"\n"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example.test/v1"
+"#
+    .to_string();
+
+    // model_list 有合法条目时，污染值被替换为 model_list 第一条
+    let mut profile = RelayProfile {
+        id: "custom".to_string(),
+        relay_mode: RelayMode::MixedApi,
+        protocol: RelayProtocol::Responses,
+        base_url: "https://relay.example.test/v1".to_string(),
+        upstream_base_url: "https://relay.example.test/v1".to_string(),
+        api_key: "sk-test-redacted".to_string(),
+        config_contents: polluted_config.clone(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-test-redacted"}"#.to_string(),
+        model_list: "deepseek-v4-flash\ngpt-5.6-sol".to_string(),
+        ..RelayProfile::default()
+    };
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    assert!(profile.config_contents.contains(r#"model = "deepseek-v4-flash""#));
+    assert!(!profile.config_contents.contains(r"\nmodel_provider"));
+    // modelList 不被污染值侵入
+    assert!(!profile.model_list.contains('\\'));
+
+    // 幂等：再次 normalize 输出稳定（修复前每轮转义翻倍增长）
+    let once = profile.config_contents.clone();
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+    assert_eq!(profile.config_contents, once);
+
+    // model_list 也为空时，污染的 model 键直接剥除而非保留
+    let mut bare = RelayProfile {
+        id: "custom".to_string(),
+        relay_mode: RelayMode::MixedApi,
+        protocol: RelayProtocol::Responses,
+        base_url: "https://relay.example.test/v1".to_string(),
+        upstream_base_url: "https://relay.example.test/v1".to_string(),
+        api_key: "sk-test-redacted".to_string(),
+        config_contents: polluted_config,
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-test-redacted"}"#.to_string(),
+        ..RelayProfile::default()
+    };
+    normalize_relay_profile_for_storage(&mut bare).unwrap();
+    assert!(!bare.config_contents.contains("model = "));
+    assert!(!bare.config_contents.contains(r"\nmodel_provider"));
+}
+
+#[test]
+fn openai_session_provider_keeps_openai_name_for_official_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut profile = RelayProfile {
+        id: "custom".to_string(),
+        relay_mode: RelayMode::Official,
+        official_mix_api_key: true,
+        protocol: RelayProtocol::Responses,
+        base_url: "https://responses.example.test/v1".to_string(),
+        upstream_base_url: "https://responses.example.test/v1".to_string(),
+        api_key: "sk-test-redacted".to_string(),
+        config_contents: r#"model = "gpt-5.6-sol"
+model_provider = "openai"
+
+[model_providers.custom]
+name = "OpenAI"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://responses.example.test/v1"
+"#
+        .to_string(),
+        ..RelayProfile::default()
+    };
+
+    normalize_relay_profile_for_storage(&mut profile).unwrap();
+
+    // 官方会话身份走 OpenAI 后端，v2 远程压缩是正常路径，name 保留。
+    assert!(profile.config_contents.contains(r#"name = "OpenAI""#));
+    let _ = temp;
+}
+
+#[test]
 fn openai_session_provider_keeps_custom_relay_transport() {
     let temp = tempfile::tempdir().unwrap();
     let mut profile = RelayProfile {
@@ -828,6 +980,41 @@ base_url = "https://responses.example.test/v1"
 
     assert!(!ensure_active_protocol_proxy_config_in_home(temp.path(), &settings).unwrap());
     assert_eq!(std::fs::read_to_string(config_path).unwrap(), original);
+}
+
+#[test]
+fn launcher_repairs_stale_openai_transport_name_without_proxy_features() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"model_provider = "custom"
+
+[model_providers.custom]
+name = "OpenAI"
+wire_api = "responses"
+base_url = "https://relay.example.test/v1"
+experimental_bearer_token = "sk-test-redacted"
+"#,
+    )
+    .unwrap();
+    let settings = BackendSettings {
+        active_relay_id: "relay".to_string(),
+        relay_profiles: vec![RelayProfile {
+            id: "relay".to_string(),
+            relay_mode: RelayMode::PureApi,
+            protocol: RelayProtocol::Responses,
+            ..RelayProfile::default()
+        }],
+        ..BackendSettings::default()
+    };
+
+    assert!(ensure_active_protocol_proxy_config_in_home(temp.path(), &settings).unwrap());
+    let updated = std::fs::read_to_string(config_path).unwrap();
+    assert!(updated.contains(r#"name = "custom""#));
+    assert!(!updated.contains(r#"name = "OpenAI""#));
+    assert!(updated.contains(r#"experimental_bearer_token = "sk-test-redacted""#));
+    assert!(!ensure_active_protocol_proxy_config_in_home(temp.path(), &settings).unwrap());
 }
 
 #[test]
@@ -1559,6 +1746,69 @@ experimental_bearer_token = "sk-a"
     assert_eq!(
         parsed["model_providers"]["custom"]["base_url"].as_str(),
         Some("https://relay-a.example/v1")
+    );
+}
+
+#[test]
+fn apply_relay_files_preserves_missing_live_hook_definitions() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("config.toml"),
+        r#"model = "old"
+
+[hooks]
+live_only_setting = "do-not-copy"
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "pwsh -File live-prompt.ps1"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "pwsh -File live-stop.ps1"
+"#,
+    )
+    .unwrap();
+
+    apply_relay_files_to_home(
+        temp.path(),
+        r#"model_provider = "custom"
+
+[hooks]
+target_only_setting = "keep-me"
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "pwsh -File target-prompt.ps1"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay-a.example/v1"
+experimental_bearer_token = "sk-a"
+"#,
+        r#"{"OPENAI_API_KEY":"sk-a"}"#,
+    )
+    .unwrap();
+
+    let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    let parsed: toml::Value = config.parse().unwrap();
+    assert_eq!(
+        parsed["hooks"]["Stop"][0]["hooks"][0]["command"].as_str(),
+        Some("pwsh -File live-stop.ps1")
+    );
+    assert_eq!(
+        parsed["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].as_str(),
+        Some("pwsh -File target-prompt.ps1")
+    );
+    assert!(parsed["hooks"].get("live_only_setting").is_none());
+    assert_eq!(
+        parsed["hooks"]["target_only_setting"].as_str(),
+        Some("keep-me")
     );
 }
 
@@ -2783,19 +3033,23 @@ model = "gpt-5-mini"
             .as_ref()
             .is_some_and(|path| path.contains("codex-plus-live-"))
     );
-    assert!(updated.contains(r#"model = "gpt-5""#));
+    assert!(updated.contains(r#"model = "gpt-5-mini""#));
     assert!(!updated.contains("model_provider ="));
     assert!(!updated.contains("model_catalog_json"));
     assert!(!updated.contains("model_context_window"));
     assert!(!updated.contains("model_auto_compact_token_limit"));
     assert!(!updated.contains("OPENAI_API_KEY"));
-    assert!(updated.contains("[model_providers.custom]"));
-    assert!(updated.contains(r#"wire_api = "responses""#));
-    assert!(updated.contains(r#"base_url = "https://relay.example.test/v1""#));
+    // 激活的中转站 provider 整段移除（#2216）：只删认证字段会留下 base_url，
+    // 切回官方后请求仍发往中转站。
+    assert!(!updated.contains("[model_providers.custom]"));
+    assert!(!updated.contains(r#"base_url = "https://relay.example.test/v1""#));
+    // 根级 model 由中转站写入，也要清掉，否则模型选择器仍显示中转站模型。
+    assert!(!updated.contains(r#"model = "gpt-5""#));
     assert!(!updated.contains("[model_providers.CodexPP]"));
     assert!(!updated.contains("experimental_bearer_token"));
     assert!(!updated.contains("requires_openai_auth"));
     assert!(!updated.contains("env_key"));
+    // 未被激活的用户自定义 provider 不受影响。
     assert!(updated.contains("[model_providers.custom1]"));
     assert!(updated.contains(r#"base_url = "https://keep.example.test/v1""#));
     assert!(updated.contains("[profiles.default]"));
@@ -3819,7 +4073,11 @@ experimental_bearer_token = "sk-new"
     assert!(config.contains("[model_providers.custom]"));
     assert!(config.contains(r#"name = "custom""#));
     assert!(config.contains(r#"wire_api = "responses""#));
-    assert!(config.contains("requires_openai_auth = true"));
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    assert_eq!(parsed["model_providers"]["custom"]["requires_openai_auth"].as_bool(), Some(true));
+    let auth = read_live_auth_value(temp.path());
+    assert_eq!(auth["OPENAI_API_KEY"], "sk-new");
+    assert!(auth.get("tokens").is_none());
     assert!(config.contains(r#"base_url = "https://relay.example/v1""#));
     assert!(!config.contains("experimental_bearer_token"));
     assert!(!config.contains("live_provider"));
@@ -4283,7 +4541,11 @@ experimental_bearer_token = "sk-new"
     assert!(config.contains(r#"name = "custom""#));
     assert!(config.contains(r#"base_url = "https://max2.jojocode.com/v1""#));
     assert!(config.contains(r#"wire_api = "responses""#));
-    assert!(config.contains("requires_openai_auth = true"));
+    let parsed: toml::Value = toml::from_str(&config).unwrap();
+    assert_eq!(parsed["model_providers"]["custom"]["requires_openai_auth"].as_bool(), Some(true));
+    let auth = read_live_auth_value(temp.path());
+    assert_eq!(auth["OPENAI_API_KEY"], "sk-new");
+    assert!(auth.get("tokens").is_none());
     assert!(!config.contains("experimental_bearer_token"));
 }
 
@@ -4597,6 +4859,41 @@ base_url = "https://relay.example/v1"
         efforts,
         vec!["low", "medium", "high", "xhigh", "max", "ultra"]
     );
+}
+
+#[test]
+fn apply_relay_profile_generates_gpt6_catalog_with_matching_prompt_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-gpt6-sol".to_string(),
+        model: "gpt-6-sol".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "gpt-6-sol"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+base_url = "https://relay.example/v1"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-test"}"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+    let catalog: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(temp.path().join("model-catalogs/relay-gpt6-sol.json")).unwrap(),
+    )
+    .unwrap();
+    let model = &catalog["models"][0];
+    assert_eq!(model["slug"], "gpt-6-sol");
+    assert_eq!(model["display_name"], "GPT-6-Sol");
+    assert!(!model["base_instructions"].as_str().unwrap().contains("based on GPT-5"));
+    assert!(!model["model_messages"]["instructions_template"]
+        .as_str()
+        .unwrap()
+        .contains("based on GPT-5"));
 }
 
 #[test]
@@ -5082,7 +5379,7 @@ experimental_bearer_token = "sk-new"
         .unwrap(),
     )
     .unwrap();
-    assert_eq!(catalog["models"][0]["use_responses_lite"], true);
+    assert_eq!(catalog["models"][0]["use_responses_lite"], false);
 }
 
 #[test]
@@ -5131,7 +5428,15 @@ fn official_login_with_openai_session_preserves_generated_catalog_lite() {
         model_list: "gpt-5.6-sol".to_string(),
         relay_mode: RelayMode::Official,
         protocol: RelayProtocol::Responses,
-        config_contents: "model = \"gpt-5.6-sol\"\nmodel_provider = \"openai\"\n".to_string(),
+        config_contents: r#"model = "gpt-5.6-sol"
+model_provider = "openai"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+base_url = "https://chatgpt.com/backend-api/codex"
+"#
+        .to_string(),
         ..RelayProfile::default()
     };
 
@@ -5815,6 +6120,47 @@ experimental_bearer_token = "sk-new"
     assert_eq!(model["visibility"], "hidden");
     assert_eq!(model["supported_in_api"], false);
     assert_eq!(model["use_responses_lite"], true);
+}
+
+#[test]
+fn model_metadata_variants_follow_javascript_enumeration_and_trigger_catalog_generation() {
+    for (slug, metadata, expected_description) in [
+        ("Model-X", r#"{"model-x":{"description":"first"},"MODEL-X[1M]":{"description":"last","context_window":1}}"#, "last"),
+        ("Model-X", r#"{"MODEL-X[1M]":{"description":"first"},"model-x":{"description":"last","context_window":1}}"#, "last"),
+        ("Model-X", r#"{"model-x":{"description":"first"},"MODEL-X":{"description":"middle"},"model-x":{"description":"last"}}"#, "middle"),
+        ("1", r#"{"1[1M]":{"description":"first"},"1":{"description":"last"}}"#, "first"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let profile = RelayProfile {
+            id: "metadata-variants".to_string(),
+            relay_mode: RelayMode::PureApi,
+            model: slug.to_string(),
+            model_list: slug.to_string(),
+            model_metadata: metadata.to_string(),
+            config_contents: format!(r#"model = "{slug}"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+base_url = "https://relay.example/v1"
+"#),
+            auth_contents: r#"{"OPENAI_API_KEY":"sk-test-metadata"}"#.to_string(),
+            ..RelayProfile::default()
+        };
+        apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+        let catalog: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                temp.path().join("model-catalogs").join("metadata-variants.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let model = &catalog["models"][0];
+        assert_eq!(model["slug"], slug);
+        assert_eq!(model["description"], expected_description);
+        assert_ne!(model["context_window"], 1);
+    }
 }
 
 /// #2123：profile 的 configContents 里残留 `%userprofile%\.codex\codex-models.json`

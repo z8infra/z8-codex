@@ -1,9 +1,36 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::sync::Mutex;
 
 use codex_plus_core::model_suffix::{
     build_model_catalog_json, build_model_catalog_json_with_template, collect_catalog_entries,
     model_ui_metadata, parse_model_suffix,
 };
+
+static RUNTIME_CACHE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct CodexHomeEnvGuard {
+    previous: Option<OsString>,
+}
+
+impl CodexHomeEnvGuard {
+    fn set(path: &std::path::Path) -> Self {
+        let previous = std::env::var_os("CODEX_HOME");
+        unsafe { std::env::set_var("CODEX_HOME", path) };
+        Self { previous }
+    }
+}
+
+impl Drop for CodexHomeEnvGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var("CODEX_HOME", value),
+                None => std::env::remove_var("CODEX_HOME"),
+            }
+        }
+    }
+}
 
 #[test]
 fn parse_suffix_extracts_k_and_m_units() {
@@ -71,6 +98,52 @@ fn collect_entries_deduplicates() {
     let entries =
         collect_catalog_entries("qwen3-coder\nqwen3-coder", &HashMap::new(), &HashMap::new(), "qwen3-coder");
     assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn collect_entries_retains_explicit_suffix_windows() {
+    let windows = HashMap::from([("Model-A".to_string(), "256K".to_string())]);
+    let entries = collect_catalog_entries(
+        "Model-A[1M]\nModel-B[512K]",
+        &windows,
+        &HashMap::new(),
+        "Model-A",
+    );
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].slug, "Model-A");
+    assert_eq!(entries[0].suffix_window, Some(1_000_000));
+    assert_eq!(entries[1].suffix_window, Some(512_000));
+
+    let entries = collect_catalog_entries(
+        "Model-A[1M]",
+        &windows,
+        &HashMap::new(),
+        "Model-A[2M]",
+    );
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].suffix_window, Some(2_000_000));
+}
+
+#[test]
+fn suffix_window_reaches_catalog_and_compaction_without_window_map() {
+    let entries = collect_catalog_entries(
+        "Model-X[1M]",
+        &HashMap::new(),
+        &HashMap::from([("Model-X".to_string(), "80%".to_string())]),
+        "Model-X",
+    );
+    let template = serde_json::json!({ "slug": "template", "context_window": 272_000 });
+    let catalog: serde_json::Value = serde_json::from_str(&build_model_catalog_json_with_template(
+        &entries,
+        Some(128_000),
+        Some(&template),
+    ))
+    .unwrap();
+    let model = &catalog["models"][0];
+    assert_eq!(model["slug"], "Model-X");
+    assert_eq!(model["context_window"], 1_000_000);
+    assert_eq!(model["max_context_window"], 1_000_000);
+    assert_eq!(model["auto_compact_token_limit"], 800_000);
 }
 
 #[test]
@@ -226,6 +299,70 @@ fn model_ui_metadata_exposes_fast_service_tier_capability() {
         serde_json::json!(["fast"])
     );
     assert_eq!(metadata["serviceTiers"][0]["id"], "priority");
+}
+
+#[test]
+fn gpt6_catalog_identity_does_not_inherit_gpt5_fallback_prompt() {
+    let _lock = RUNTIME_CACHE_ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let _guard = CodexHomeEnvGuard::set(temp.path());
+    let entries = collect_catalog_entries(
+        "gpt-6-sol\ngpt-6-luna\ngpt-6-astra\ngpt-6.1-sol",
+        &HashMap::new(),
+        &HashMap::new(),
+        "gpt-6-sol",
+    );
+    let catalog: serde_json::Value =
+        serde_json::from_str(&build_model_catalog_json(&entries, None)).unwrap();
+    for model in catalog["models"].as_array().unwrap() {
+        let slug = model["slug"].as_str().unwrap();
+        let base = model["base_instructions"].as_str().unwrap();
+        let template = model["model_messages"]["instructions_template"]
+            .as_str()
+            .unwrap();
+        assert!(!base.contains("based on GPT-5"), "{slug} inherited GPT-5 base prompt");
+        assert!(
+            !template.contains("based on GPT-5"),
+            "{slug} inherited GPT-5 model message prompt"
+        );
+        if slug.starts_with("gpt-6.1") {
+            assert!(base.contains("based on GPT-6.1"));
+        } else {
+            assert!(base.contains("based on GPT-6"));
+        }
+    }
+}
+
+#[test]
+fn gpt6_catalog_prefers_runtime_models_cache_metadata() {
+    let _lock = RUNTIME_CACHE_ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let cache = serde_json::json!({
+        "models": [{
+            "slug": "gpt-6-sol",
+            "display_name": "GPT-6 Sol Runtime",
+            "base_instructions": "You are Codex, a coding agent based on GPT-6 Runtime.",
+            "model_messages": {
+                "instructions_template": "You are Codex, a coding agent based on GPT-6 Runtime."
+            },
+            "context_window": 300000u64,
+            "max_context_window": 900000u64,
+            "shell_type": "unified_exec",
+            "runtime_marker": "models-cache"
+        }]
+    });
+    std::fs::write(temp.path().join("models_cache.json"), cache.to_string()).unwrap();
+    let _guard = CodexHomeEnvGuard::set(temp.path());
+    let entries = collect_catalog_entries("gpt-6-sol", &HashMap::new(), &HashMap::new(), "");
+    let catalog: serde_json::Value =
+        serde_json::from_str(&build_model_catalog_json(&entries, None)).unwrap();
+    let model = &catalog["models"][0];
+    assert_eq!(model["display_name"], "GPT-6-Sol");
+    assert_eq!(model["shell_type"], "unified_exec");
+    assert_eq!(model["runtime_marker"], "models-cache");
+    assert_eq!(model["base_instructions"], "You are Codex, a coding agent based on GPT-6 Runtime.");
+    assert_eq!(model["context_window"], 272_000);
+    assert_eq!(model["max_context_window"], 872_000);
 }
 
 #[test]

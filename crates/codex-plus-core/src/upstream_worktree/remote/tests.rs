@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::zed_remote::SshTarget;
+use crate::remote_ssh::SshTarget;
 
 use super::{remote_defaults_snapshot_script, remote_git_command, remote_path_join, shell_quote};
 use crate::upstream_worktree::UpstreamRemoteProject;

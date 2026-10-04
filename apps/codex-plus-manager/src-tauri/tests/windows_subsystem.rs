@@ -342,22 +342,13 @@ fn provider_import_commands_return_metadata_only() {
         "pending: pending.as_ref().map(pending_provider_import_summary)"
     ));
     assert!(commands_rs.contains("pub has_api_key: bool"));
-    assert!(commands_rs.contains(
-        "pub fn reset_dream_skin_theme() -> CommandResult<SettingsMutationPayload>"
-    ));
-    assert!(commands_rs.contains(
-        "pub async fn refresh_user_script_inventory() -> CommandResult<SettingsMutationPayload>"
-    ));
-    let compact_commands = commands_rs.split_whitespace().collect::<String>();
-    assert!(compact_commands.contains(
-        "pubfnset_user_script_enabled(key:String,enabled:bool,)->CommandResult<SettingsMutationPayload>"
-    ));
-    assert!(commands_rs.contains(
-        "pub fn delete_user_script(key: String) -> CommandResult<SettingsMutationPayload>"
-    ));
-    assert!(app_tsx.contains("call<SettingsMutationResult>(\"refresh_user_script_inventory\")"));
-    assert!(app_tsx.contains("call<SettingsMutationResult>(\"set_user_script_enabled\""));
-    assert!(app_tsx.contains("call<SettingsMutationResult>(\"delete_user_script\""));
+    assert!(!commands_rs.contains("reset_dream_skin_theme"));
+    assert!(!commands_rs.contains("refresh_user_script_inventory"));
+    assert!(!commands_rs.contains("set_user_script_enabled"));
+    assert!(!commands_rs.contains("delete_user_script"));
+    assert!(!app_tsx.contains("refresh_user_script_inventory"));
+    assert!(!app_tsx.contains("set_user_script_enabled"));
+    assert!(!app_tsx.contains("delete_user_script"));
     assert!(!commands_rs.contains("pub providers: Vec<codex_plus_core::ccs_import::CcsProviderImport>"));
     assert!(!commands_rs.contains(
         "pub pending: Option<codex_plus_core::provider_import::ProviderImportRequest>"
@@ -511,7 +502,6 @@ fn manager_update_install_keeps_visible_progress_bar() {
     assert!(app_tsx.contains("下载并运行安装包"));
     assert!(app_tsx.contains("updateInstallProgress"));
     assert!(app_tsx.contains("安装包更新进度"));
-    assert!(app_tsx.contains("progress.active || progress.percent > 0"));
     assert!(app_tsx.contains("completedTitle={t(\"上次更新结果\")}"));
     assert!(app_tsx.contains("progress={updateInstallProgress}"));
     assert!(app_tsx.contains("z8-codex.update.last-check-date"));

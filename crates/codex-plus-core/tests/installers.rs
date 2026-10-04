@@ -116,7 +116,7 @@ fn macos_bundle_metadata_contains_silent_and_manager_apps() {
             .info_plist
             .contains("<string>Z8 Codex 管理工具</string>")
     );
-    assert!(manager.info_plist.contains("<string>dreamskin</string>"));
+    assert!(!manager.info_plist.contains("dreamskin"));
     assert!(
         manager
             .info_plist

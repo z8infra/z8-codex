@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-1.3.8}"
+VERSION="${1:-1.4.0}"
 ARCH="${2:-$(uname -m)}"
 if [ "$ARCH" = "x86_64" ]; then
   ARCH="x64"
@@ -226,6 +226,24 @@ DMG_CREATED=false
 MOUNT_POINT=""
 MOUNT_DEVICE=""
 
+release_dmg_holders() {
+  local target="$1"
+  local pids=""
+
+  if command -v lsof >/dev/null 2>&1; then
+    pids="$(lsof -t -- "$target" 2>/dev/null || true)"
+  fi
+  if [ -z "$pids" ] && [ "${GITHUB_ACTIONS:-}" = "true" ] && command -v pgrep >/dev/null 2>&1; then
+    pids="$(pgrep -x diskimages-helper || true)"
+  fi
+  if [ -n "$pids" ]; then
+    # The helper can remain attached after hdiutil -force on macOS CI.
+    # Killing only processes holding this image keeps the next conversion viable.
+    # shellcheck disable=SC2086
+    kill -KILL $pids >/dev/null 2>&1 || true
+  fi
+}
+
 detach_dmg() {
   local target="$1"
   local attempt
@@ -266,6 +284,7 @@ detach_dmg() {
       return 0
     fi
 
+    release_dmg_holders "$target"
     sleep "$((attempt * 2))"
   done
 

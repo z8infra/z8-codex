@@ -132,6 +132,16 @@ fn install_failure_message(error: &anyhow::Error) -> &'static str {
         .is_some()
     {
         "当前设备对应的 Z8 镜像资源尚未发布。请稍后重试，或从 Codex 官方渠道手动安装。"
+    } else if let Some(error) = error
+        .downcast_ref::<codex_desktop_mirror::WindowsPackageInstallError>()
+    {
+        if error.cancelled() {
+            "已取消 Codex 桌面版安装，已下载内容会保留；确认允许 Windows UAC 后可继续安装。"
+        } else if error.requires_admin() {
+            "Windows 拒绝了 Codex 桌面版安装，因为该 MSIX 包含需要管理员权限的系统服务。请在 UAC 提示中允许修复；若已取消，请以管理员身份运行 Z8 Codex 后重试。已下载内容会保留。"
+        } else {
+            "Windows 尚未完成 Codex 桌面版安装。请先关闭 Codex 桌面版后重试；已下载内容会保留，无需重新下载。"
+        }
     } else {
         "下载、校验或安装未完成。请检查网络连接和磁盘空间后重试。"
     }
@@ -274,7 +284,7 @@ pub async fn z8_install_host(
     if installed_host_path(None).is_none() {
         return install_result(
             "failed",
-            "安装流程已结束，但仍未检测到 Codex 桌面版。请重新检测或手动设置应用路径。",
+            "Windows 安装命令已结束，但当前用户仍未检测到 Codex 桌面版。请确认 UAC 使用的是当前 Windows 账户的管理员权限，再重新检测。",
             false,
             false,
         );
@@ -373,6 +383,25 @@ mod tests {
 
         let other = anyhow::anyhow!("private local path or mirror URL");
         assert!(!install_failure_message(&other).contains("private local path"));
+
+        let windows_install = anyhow::Error::new(codex_desktop_mirror::WindowsPackageInstallError {
+            exit_code: Some(1),
+            hresult: None,
+        });
+        assert!(install_failure_message(&windows_install).contains("已下载内容会保留"));
+
+        let windows_admin = anyhow::Error::new(codex_desktop_mirror::WindowsPackageInstallError {
+            exit_code: Some(1),
+            hresult: Some("0X80073D28".into()),
+        });
+        assert!(install_failure_message(&windows_admin).contains("管理员权限"));
+        assert!(install_failure_message(&windows_admin).contains("系统服务"));
+
+        let windows_cancelled = anyhow::Error::new(codex_desktop_mirror::WindowsPackageInstallError {
+            exit_code: Some(1223),
+            hresult: None,
+        });
+        assert!(install_failure_message(&windows_cancelled).contains("已取消"));
     }
 
     #[test]

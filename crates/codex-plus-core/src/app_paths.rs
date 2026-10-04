@@ -596,7 +596,55 @@ pub fn packaged_app_user_model_id(app_dir: &Path) -> Option<String> {
     if publisher_id.is_empty() {
         return None;
     }
-    Some(format!("{}_{publisher_id}!{}", spec.identity, spec.app_id))
+    // The Store package can change its Application Id independently of the
+    // package identity. Prefer the manifest value so AUMID activation follows
+    // the installed app; retain the historical fallback for incomplete test
+    // fixtures and older packages.
+    let app_id = packaged_manifest_app_id(app_dir).unwrap_or_else(|| spec.app_id.to_string());
+    Some(format!("{}_{publisher_id}!{app_id}", spec.identity))
+}
+
+fn packaged_manifest_app_id(app_dir: &Path) -> Option<String> {
+    let package_dir = if app_dir
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("app"))
+    {
+        app_dir.parent()?
+    } else {
+        app_dir
+    };
+    let manifest = std::fs::read_to_string(package_dir.join("AppxManifest.xml")).ok()?;
+    manifest_first_application_id(&manifest)
+}
+
+fn manifest_first_application_id(manifest: &str) -> Option<String> {
+    let mut rest = manifest;
+    while let Some(pos) = rest.find("<Application") {
+        rest = &rest[pos + "<Application".len()..];
+        // Skip the <Applications> container and inspect actual application tags.
+        if !rest.chars().next().is_some_and(char::is_whitespace) {
+            continue;
+        }
+        let tag_end = rest.find('>')?;
+        if let Some(id) = xml_attribute_value(&rest[..tag_end], "Id") {
+            return Some(id);
+        }
+        rest = &rest[tag_end..];
+    }
+    None
+}
+
+fn xml_attribute_value(tag: &str, name: &str) -> Option<String> {
+    for segment in tag.split_whitespace() {
+        let Some((attribute, value)) = segment.split_once('=') else {
+            continue;
+        };
+        if attribute == name {
+            return Some(value.trim_matches('"').trim_matches('\'').to_string());
+        }
+    }
+    None
 }
 
 fn package_name_from_app_dir(app_dir: &Path) -> Option<String> {
