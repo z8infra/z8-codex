@@ -245,7 +245,7 @@ fn windows_update_mode_closes_z8_processes_before_install_preflight() {
 }
 
 #[test]
-fn windows_release_and_pr_build_package_native_x64_wrappers() {
+fn windows_release_and_pr_build_package_native_x64_and_arm64_wrappers() {
     let release = read_repo(".github/workflows/release-assets.yml");
     for required in [
         "runner: windows-latest",
@@ -267,6 +267,8 @@ fn windows_release_and_pr_build_package_native_x64_wrappers() {
     for required in [
         "runner: windows-latest",
         "target: x86_64-pc-windows-msvc",
+        "runner: windows-11-arm",
+        "target: aarch64-pc-windows-msvc",
         "cargo build --release --locked --target ${{ matrix.target }}",
         "target/${{ matrix.target }}/release/codex-plus-plus.exe",
         "target/${{ matrix.target }}/release/codex-plus-plus-manager.exe",
@@ -277,8 +279,6 @@ fn windows_release_and_pr_build_package_native_x64_wrappers() {
     ] {
         assert!(pr.contains(required), "PR workflow must contain {required:?}");
     }
-    assert!(!pr.contains("runner: windows-11-arm"));
-    assert!(!pr.contains("target: aarch64-pc-windows-msvc"));
 
     assert!(release.contains("Z8Codex-$version-windows-${{ matrix.arch }}.zip"));
     assert!(release.contains("dist/windows/*.exe"));

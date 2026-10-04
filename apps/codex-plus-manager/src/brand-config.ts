@@ -19,18 +19,10 @@ export const Z8_BRAND = {
 export const Z8_FEATURES = {
   /** Z8 发行版从 GitHub Release 的 Z8Codex 资产检查并安装更新。 */
   onlineUpdates: true,
-  /** 第一版不开放第三方 Dream Skin/皮肤市场。 */
-  dreamSkin: false,
-  /** 第一版不开放 Zed Remote 项目入口。 */
-  zedRemote: false,
-  /** 第一版不开放脚本市场入口。 */
-  userScripts: false,
 } as const;
 
-export type Z8Feature = keyof typeof Z8_FEATURES;
-
 /**
- * Routes intentionally removed from the first Z8 release. Keep this list
+ * Retired routes kept only as compatibility sentinels. Keep this list
  * separate from the UI route table so an external deep link cannot reopen an
  * upstream-only page after the sidebar item has been hidden.
  */
@@ -39,11 +31,8 @@ export const Z8_DISABLED_ROUTES = [
   "dreamSkin",
   "zedRemote",
   "userScripts",
+  "recommendations",
 ] as const;
-
-export function isZ8FeatureEnabled(feature?: Z8Feature): boolean {
-  return !feature || Z8_FEATURES[feature];
-}
 
 export function isZ8RouteDisabled(route: string): boolean {
   return (Z8_DISABLED_ROUTES as readonly string[]).includes(route);

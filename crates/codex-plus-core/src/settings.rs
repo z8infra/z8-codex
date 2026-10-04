@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -9,7 +11,6 @@ use serde_json::{Map, Value};
 use toml_edit::{DocumentMut, Item};
 
 use crate::tools::{ToolConfig, ToolId};
-use crate::zed_remote::ZedOpenStrategy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -275,126 +276,7 @@ pub enum RelayMode {
     Aggregate,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DreamSkinColors {
-    pub background: String,
-    pub panel: String,
-    pub panel_alt: String,
-    pub accent: String,
-    pub accent_alt: String,
-    pub secondary: String,
-    pub highlight: String,
-    pub text: String,
-    pub muted: String,
-    pub line: String,
-}
 
-impl Default for DreamSkinColors {
-    fn default() -> Self {
-        Self {
-            background: "#F7F4F5".to_string(),
-            panel: "#FFFFFF".to_string(),
-            panel_alt: "#FFF7F8".to_string(),
-            accent: "#E25563".to_string(),
-            accent_alt: "#F07A86".to_string(),
-            secondary: "#F3A8AF".to_string(),
-            highlight: "#C93D4C".to_string(),
-            text: "#2B2224".to_string(),
-            muted: "#8A7A7D".to_string(),
-            line: "rgba(196, 120, 128, .22)".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DreamSkinThemeConfig {
-    #[serde(default = "default_dream_skin_schema_version")]
-    pub schema_version: u8,
-    #[serde(default = "default_dream_skin_id")]
-    pub id: String,
-    #[serde(default = "default_dream_skin_name")]
-    pub name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub style_preset: String,
-    #[serde(default = "default_dream_skin_brand_subtitle")]
-    pub brand_subtitle: String,
-    #[serde(default = "default_dream_skin_tagline")]
-    pub tagline: String,
-    #[serde(default = "default_dream_skin_project_prefix")]
-    pub project_prefix: String,
-    #[serde(default = "default_dream_skin_project_label")]
-    pub project_label: String,
-    #[serde(default = "default_dream_skin_status_text")]
-    pub status_text: String,
-    #[serde(default = "default_dream_skin_quote")]
-    pub quote: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub colors: Option<DreamSkinColors>,
-    #[serde(flatten)]
-    pub extra_fields: Map<String, Value>,
-}
-
-impl Default for DreamSkinThemeConfig {
-    fn default() -> Self {
-        let mut extra_fields = Map::new();
-        #[cfg(windows)]
-        {
-            extra_fields.insert(
-                "image".to_string(),
-                Value::String("dream-reference.jpg".to_string()),
-            );
-            extra_fields.insert("appearance".to_string(), Value::String("auto".to_string()));
-            extra_fields.insert(
-                "art".to_string(),
-                serde_json::json!({
-                    "focusX": 0.72,
-                    "focusY": 0.45,
-                    "safeArea": "left",
-                    "taskMode": "ambient"
-                }),
-            );
-        }
-        #[cfg(not(windows))]
-        {
-            extra_fields.insert(
-                "image".to_string(),
-                Value::String("portal-hero.png".to_string()),
-            );
-            extra_fields.insert(
-                "promoTitle".to_string(),
-                Value::String("感谢 Passion8 赞助".to_string()),
-            );
-            extra_fields.insert(
-                "promoSub".to_string(),
-                Value::String("passion8.cc".to_string()),
-            );
-            extra_fields.insert(
-                "promoUrl".to_string(),
-                Value::String("https://passion8.cc/register?aff=TuPe".to_string()),
-            );
-        }
-        Self {
-            schema_version: default_dream_skin_schema_version(),
-            id: default_dream_skin_id(),
-            name: default_dream_skin_name(),
-            style_preset: String::new(),
-            brand_subtitle: default_dream_skin_brand_subtitle(),
-            tagline: default_dream_skin_tagline(),
-            project_prefix: default_dream_skin_project_prefix(),
-            project_label: default_dream_skin_project_label(),
-            status_text: default_dream_skin_status_text(),
-            quote: default_dream_skin_quote(),
-            colors: if cfg!(windows) {
-                None
-            } else {
-                Some(DreamSkinColors::default())
-            },
-            extra_fields,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BackendSettings {
@@ -436,14 +318,6 @@ pub struct BackendSettings {
     pub codex_app_conversation_view: bool,
     #[serde(rename = "codexAppThreadScrollRestore", default = "default_true")]
     pub codex_app_thread_scroll_restore: bool,
-    #[serde(rename = "codexAppZedRemoteOpen", default = "default_true")]
-    pub codex_app_zed_remote_open: bool,
-    #[serde(rename = "zedRemoteOpenStrategy", default)]
-    pub zed_remote_open_strategy: ZedOpenStrategy,
-    #[serde(rename = "zedRemoteProjectRegistryEnabled", default = "default_true")]
-    pub zed_remote_project_registry_enabled: bool,
-    #[serde(rename = "zedRemoteSyncToZedSettings", default)]
-    pub zed_remote_sync_to_zed_settings: bool,
     #[serde(rename = "codexAppUpstreamWorktreeCreate", default = "default_true")]
     pub codex_app_upstream_worktree_create: bool,
     #[serde(rename = "codexAppNativeMenuPlacement", default = "default_true")]
@@ -526,20 +400,6 @@ pub struct BackendSettings {
         deserialize_with = "deserialize_image_overlay_fit_mode"
     )]
     pub codex_app_image_overlay_fit_mode: String,
-    #[serde(rename = "codexAppDreamSkinEnabled", default)]
-    pub codex_app_dream_skin_enabled: bool,
-    #[serde(rename = "codexAppDreamSkinPaused", default)]
-    pub codex_app_dream_skin_paused: bool,
-    #[serde(
-        rename = "codexAppDreamSkinTheme",
-        default = "default_dream_skin_theme",
-        deserialize_with = "deserialize_dream_skin_theme"
-    )]
-    pub codex_app_dream_skin_theme: String,
-    #[serde(rename = "codexAppDreamSkinThemeConfig", default)]
-    pub codex_app_dream_skin_theme_config: DreamSkinThemeConfig,
-    #[serde(rename = "codexAppDreamSkinImagePath", default)]
-    pub codex_app_dream_skin_image_path: String,
     #[serde(rename = "codexGoalsEnabled", default)]
     pub codex_goals_enabled: bool,
     #[serde(rename = "weixinConnectEnabled", default)]
@@ -619,10 +479,6 @@ impl Default for BackendSettings {
             codex_app_thread_id_badge: false,
             codex_app_conversation_view: false,
             codex_app_thread_scroll_restore: true,
-            codex_app_zed_remote_open: true,
-            zed_remote_open_strategy: ZedOpenStrategy::AddToFocusedWorkspace,
-            zed_remote_project_registry_enabled: true,
-            zed_remote_sync_to_zed_settings: false,
             codex_app_upstream_worktree_create: true,
             codex_app_native_menu_placement: true,
             codex_app_native_menu_localization: true,
@@ -646,11 +502,6 @@ impl Default for BackendSettings {
             codex_app_image_overlay_path: String::new(),
             codex_app_image_overlay_opacity: default_image_overlay_opacity(),
             codex_app_image_overlay_fit_mode: default_image_overlay_fit_mode(),
-            codex_app_dream_skin_enabled: false,
-            codex_app_dream_skin_paused: false,
-            codex_app_dream_skin_theme: default_dream_skin_theme(),
-            codex_app_dream_skin_theme_config: DreamSkinThemeConfig::default(),
-            codex_app_dream_skin_image_path: String::new(),
             codex_goals_enabled: false,
             weixin_connect_enabled: false,
             weixin_connect_base_url: default_weixin_connect_base_url(),
@@ -906,109 +757,6 @@ fn normalize_image_overlay_fit_mode(value: &str) -> String {
     }
 }
 
-pub fn default_dream_skin_theme() -> String {
-    "pink".to_string()
-}
-
-fn default_dream_skin_schema_version() -> u8 {
-    1
-}
-
-#[cfg(windows)]
-fn default_dream_skin_id() -> String {
-    "preset-arina-hashimoto".to_string()
-}
-
-#[cfg(not(windows))]
-fn default_dream_skin_id() -> String {
-    "custom-1784123441349".to_string()
-}
-
-#[cfg(windows)]
-fn default_dream_skin_name() -> String {
-    "桥本有菜".to_string()
-}
-
-#[cfg(not(windows))]
-fn default_dream_skin_name() -> String {
-    "Dream Skin".to_string()
-}
-
-pub fn resolve_dream_skin_style_preset(id: &str, style_preset: &str) -> String {
-    let style_preset = style_preset.trim();
-    if !style_preset.is_empty() && style_preset != "dream-original" {
-        return style_preset.to_string();
-    }
-
-    match id.trim() {
-        "caishen-lite" => "caishen-lite",
-        "caishen-max" => "caishen-max",
-        "caishen-readable" => "caishen-readable",
-        "export-night" => "export-night",
-        "global-founder-bright" => "global-founder-bright",
-        "mythic-guardian-noir" => "mythic-guardian-noir",
-        "codex-snow-skin" => "codex-snow",
-        "glass-vision" => "glass-vision",
-        "preset-midnight-aurora" => "midnight-aurora",
-        "preset-amber-dusk" => "amber-dusk",
-        "preset-forest-mist" => "forest-mist",
-        "preset-cyber-neon" => "cyber-neon",
-        "preset-sakura-dawn" => "sakura-dawn",
-        _ => "dream-original",
-    }
-    .to_string()
-}
-
-fn default_dream_skin_brand_subtitle() -> String {
-    "CODEX DREAM SKIN".to_string()
-}
-
-#[cfg(windows)]
-fn default_dream_skin_tagline() -> String {
-    "把柔光与玫瑰带进今天的工作台。".to_string()
-}
-
-#[cfg(not(windows))]
-fn default_dream_skin_tagline() -> String {
-    "把喜欢的画面变成可交互的 Codex 工作台。".to_string()
-}
-
-fn default_dream_skin_project_prefix() -> String {
-    "选择项目 · ".to_string()
-}
-
-fn default_dream_skin_project_label() -> String {
-    "◉  选择项目".to_string()
-}
-
-#[cfg(windows)]
-fn default_dream_skin_status_text() -> String {
-    "DREAM SKIN ONLINE".to_string()
-}
-
-#[cfg(not(windows))]
-fn default_dream_skin_status_text() -> String {
-    "THEME ONLINE".to_string()
-}
-
-#[cfg(windows)]
-fn default_dream_skin_quote() -> String {
-    "MAKE SOMETHING WONDERFUL".to_string()
-}
-
-#[cfg(not(windows))]
-fn default_dream_skin_quote() -> String {
-    "Make something wonderful".to_string()
-}
-
-fn normalize_dream_skin_theme(value: &str) -> String {
-    match value.trim() {
-        "pink" | "luckyGod" | "redWhite" | "clearGlass" | "inspiration" | "purpleNight"
-        | "miku" | "blackGold" => value.trim().to_string(),
-        _ => default_dream_skin_theme(),
-    }
-}
-
 pub fn clamp_stepwise_max_items(value: u8) -> u8 {
     value.min(6)
 }
@@ -1103,14 +851,7 @@ where
         .unwrap_or_else(default_image_overlay_fit_mode))
 }
 
-fn deserialize_dream_skin_theme<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(deserializer)?
-        .map(|value| normalize_dream_skin_theme(&value))
-        .unwrap_or_else(default_dream_skin_theme))
-}
+
 
 fn deserialize_stepwise_max_items<'de, D>(deserializer: D) -> Result<u8, D::Error>
 where
@@ -1203,7 +944,11 @@ impl SettingsStore {
         self.load()?;
         let mut settings = normalize_settings_config_sections(settings.clone());
         settings.codex_extra_args = normalize_codex_extra_args(&settings.codex_extra_args);
-        let bytes = serde_json::to_vec_pretty(&settings)?;
+        let mut raw = self.load_raw_object()?;
+        let mut snapshot = settings_to_object(&settings);
+        preserve_inactive_tool_shards(&raw, &mut snapshot);
+        raw.extend(snapshot);
+        let bytes = serde_json::to_vec_pretty(&Value::Object(raw))?;
         atomic_write(&self.path, &bytes)
     }
 
@@ -1236,10 +981,10 @@ impl SettingsStore {
         );
         // 归一化把扁平字段镜像进了 tools.codex，这里写回原始对象，
         // 否则 update 路径保存的分片会停留在迁移前的旧值。
-        raw.insert(
-            "tools".to_string(),
-            serde_json::to_value(&settings.tools).unwrap_or_else(|_| Value::Object(Map::new())),
-        );
+        let mut snapshot = settings_to_object(&settings);
+        preserve_inactive_tool_shards(&raw, &mut snapshot);
+        raw.insert("tools".to_string(), snapshot.remove("tools").unwrap());
+        raw.insert("activeTool".to_string(), serde_json::to_value(&settings.active_tool)?);
         let bytes = serde_json::to_vec_pretty(&Value::Object(raw))?;
         atomic_write(&self.path, &bytes)?;
         Ok(settings)
@@ -1261,6 +1006,20 @@ impl SettingsStore {
             Ok(Value::Object(map)) => Ok(map),
             Ok(_) => anyhow::bail!("settings {} 顶层不是 JSON 对象", self.path.display()),
             Err(_) => anyhow::bail!("settings {} 解析失败", self.path.display()),
+        }
+    }
+}
+
+// Retired and future tool adapters are inactive. Keep their original opaque data;
+// only the Codex shard is managed by this version.
+fn preserve_inactive_tool_shards(raw: &Map<String, Value>, snapshot: &mut Map<String, Value>) {
+    if let (Some(Value::Object(original)), Some(Value::Object(tools))) =
+        (raw.get("tools"), snapshot.get_mut("tools"))
+    {
+        for (key, value) in original {
+            if key != "codex" {
+                tools.insert(key.clone(), value.clone());
+            }
         }
     }
 }
@@ -1312,14 +1071,6 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
     merge_bool_setting(target, source, "codexAppThreadIdBadge");
     merge_bool_setting(target, source, "codexAppConversationView");
     merge_bool_setting(target, source, "codexAppThreadScrollRestore");
-    merge_bool_setting(target, source, "codexAppZedRemoteOpen");
-    if let Some(value) = source.get("zedRemoteOpenStrategy") {
-        if serde_json::from_value::<ZedOpenStrategy>(value.clone()).is_ok() {
-            target.insert("zedRemoteOpenStrategy".to_string(), value.clone());
-        }
-    }
-    merge_bool_setting(target, source, "zedRemoteProjectRegistryEnabled");
-    merge_bool_setting(target, source, "zedRemoteSyncToZedSettings");
     merge_bool_setting(target, source, "codexAppUpstreamWorktreeCreate");
     merge_bool_setting(target, source, "codexAppNativeMenuPlacement");
     merge_bool_setting(target, source, "codexAppNativeMenuLocalization");
@@ -1451,28 +1202,6 @@ fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<Stri
         target.insert(
             "codexAppImageOverlayFitMode".to_string(),
             Value::String(normalize_image_overlay_fit_mode(value)),
-        );
-    }
-    merge_bool_setting(target, source, "codexAppDreamSkinEnabled");
-    merge_bool_setting(target, source, "codexAppDreamSkinPaused");
-    if let Some(value) = source.get("codexAppDreamSkinTheme").and_then(Value::as_str) {
-        target.insert(
-            "codexAppDreamSkinTheme".to_string(),
-            Value::String(normalize_dream_skin_theme(value)),
-        );
-    }
-    if let Some(value) = source.get("codexAppDreamSkinThemeConfig")
-        && serde_json::from_value::<DreamSkinThemeConfig>(value.clone()).is_ok()
-    {
-        target.insert("codexAppDreamSkinThemeConfig".to_string(), value.clone());
-    }
-    if let Some(value) = source
-        .get("codexAppDreamSkinImagePath")
-        .and_then(Value::as_str)
-    {
-        target.insert(
-            "codexAppDreamSkinImagePath".to_string(),
-            Value::String(value.trim().to_string()),
         );
     }
     if let Some(value) = source.get("codexGoalsEnabled").and_then(Value::as_bool) {
@@ -1686,6 +1415,9 @@ fn settings_to_object(settings: &BackendSettings) -> Map<String, Value> {
 }
 
 fn normalize_settings_config_sections(mut settings: BackendSettings) -> BackendSettings {
+    if settings.active_tool == ToolId::Grok {
+        settings.active_tool = ToolId::Codex;
+    }
     settings.ccs_db_path = settings.ccs_db_path.trim().to_string();
     let (common, extracted_context) =
         split_context_config_sections(&settings.relay_common_config_contents);
@@ -1704,15 +1436,6 @@ fn normalize_settings_config_sections(mut settings: BackendSettings) -> BackendS
         clamp_image_overlay_opacity(settings.codex_app_image_overlay_opacity);
     settings.codex_app_image_overlay_fit_mode =
         normalize_image_overlay_fit_mode(&settings.codex_app_image_overlay_fit_mode);
-    settings.codex_app_dream_skin_theme =
-        normalize_dream_skin_theme(&settings.codex_app_dream_skin_theme);
-    if settings.codex_app_dream_skin_theme_config == DreamSkinThemeConfig::default()
-        && settings.codex_app_dream_skin_theme != default_dream_skin_theme()
-    {
-        settings.codex_app_dream_skin_theme_config.id = settings.codex_app_dream_skin_theme.clone();
-    }
-    settings.codex_app_dream_skin_image_path =
-        settings.codex_app_dream_skin_image_path.trim().to_string();
     settings.codex_app_stepwise_base_url = settings
         .codex_app_stepwise_base_url
         .trim()
@@ -1818,15 +1541,36 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     atomic_write_with(path, |file| file.write_all(bytes))
 }
 
+/// 原子写入凭据派生文件。临时文件在写入第一个字节前就应用私有权限，
+/// 避免 API Key 在权限修补前短暂暴露。
+pub fn atomic_private_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    atomic_write_with_policy(path, true, |file| file.write_all(bytes))
+}
+
 /// 流式原子写入：内容由 `write_contents` 直接写进临时文件，调用方不必先把
 /// 完整字节拼在内存里。大文件（如历史会话的 rollout JSONL）走这条路径。
 pub fn atomic_write_with(
     path: &Path,
     write_contents: impl FnOnce(&mut File) -> std::io::Result<()>,
 ) -> anyhow::Result<()> {
+    atomic_write_with_policy(path, false, write_contents)
+}
+
+fn atomic_write_with_policy(
+    path: &Path,
+    private: bool,
+    write_contents: impl FnOnce(&mut File) -> std::io::Result<()>,
+) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create directory {}", parent.display()))?;
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).with_context(|| {
+                format!("failed to protect private directory {}", parent.display())
+            })?;
+        }
     }
 
     // 保留原文件的权限位/只读属性。Windows 上这不包含 DACL；运行时凭据
@@ -1840,7 +1584,7 @@ pub fn atomic_write_with(
         }
     };
     #[cfg(windows)]
-    let private_runtime_document = is_private_runtime_document(path);
+    let private_runtime_document = private || is_private_runtime_document(path);
     #[cfg(windows)]
     let temp_path = if private_runtime_document {
         private_runtime_temp_path_for(path)
@@ -1858,11 +1602,21 @@ pub fn atomic_write_with(
             File::create(&temp_path)?
         };
         #[cfg(not(windows))]
-        let mut temp_file = File::create(&temp_path)?;
+        let mut temp_file = if private {
+            create_private_unix_file(&temp_path)?
+        } else {
+            File::create(&temp_path)?
+        };
         temp_created = true;
         write_contents(&mut temp_file)?;
         temp_file.flush()?;
-        if let Some(permissions) = existing_permissions {
+        if private {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                temp_file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            }
+        } else if let Some(permissions) = existing_permissions {
             temp_file.set_permissions(permissions)?;
         }
         Ok(())
@@ -1885,6 +1639,16 @@ pub fn atomic_write_with(
         });
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn create_private_unix_file(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
 }
 
 #[cfg(windows)]
@@ -2329,6 +2093,43 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn atomic_private_write_replaces_file_and_cleans_temp_file() {
+        let dir = temp_dir();
+        let path = dir.join("imagegen").join(".env");
+
+        atomic_private_write(&path, b"IMAGEGEN_API_KEY='synthetic-secret'\n").unwrap();
+
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"IMAGEGEN_API_KEY='synthetic-secret'\n"
+        );
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .count(),
+            1,
+            "private atomic write must remove its temporary file"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(path.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[cfg(windows)]
     #[test]
     fn runtime_atomic_write_protects_temp_and_replacement_under_public_parent() {
@@ -2459,12 +2260,6 @@ mod tests {
         assert!(!settings.codex_goals_enabled);
         assert!(settings.codex_app_path.is_empty());
         assert!(settings.codex_extra_args.is_empty());
-        assert_eq!(
-            settings.zed_remote_open_strategy,
-            ZedOpenStrategy::AddToFocusedWorkspace
-        );
-        assert!(settings.zed_remote_project_registry_enabled);
-        assert!(!settings.zed_remote_sync_to_zed_settings);
         assert!(settings.codex_app_native_menu_localization);
         assert_eq!(settings.launch_mode, LaunchMode::Patch);
         assert_eq!(settings.relay_base_url, default_relay_base_url());
@@ -3400,57 +3195,7 @@ experimental_bearer_token = "sk-existing""#
         assert_eq!(updated.codex_app_image_overlay_fit_mode, "fit");
     }
 
-    #[test]
-    fn settings_store_update_persists_dream_skin_settings() {
-        let dir = temp_dir();
-        let store = SettingsStore::new(dir.join("settings.json"));
 
-        let updated = store
-            .update(json!({
-                "codexAppDreamSkinEnabled": true,
-                "codexAppDreamSkinTheme": "miku",
-                "codexAppDreamSkinImagePath": " C:\\Users\\me\\Pictures\\dream.webp "
-            }))
-            .unwrap();
-
-        assert!(updated.codex_app_dream_skin_enabled);
-        assert_eq!(updated.codex_app_dream_skin_theme, "miku");
-        assert_eq!(
-            updated.codex_app_dream_skin_image_path,
-            r"C:\Users\me\Pictures\dream.webp"
-        );
-        assert_eq!(store.load().unwrap(), updated);
-    }
-
-    #[test]
-    fn settings_store_defaults_invalid_dream_skin_theme_to_pink() {
-        let dir = temp_dir();
-        let store = SettingsStore::new(dir.join("settings.json"));
-
-        let updated = store
-            .update(json!({
-                "codexAppDreamSkinTheme": "unknown"
-            }))
-            .unwrap();
-
-        assert_eq!(updated.codex_app_dream_skin_theme, "pink");
-    }
-
-    #[test]
-    fn legacy_market_theme_ids_resolve_to_layout_presets() {
-        assert_eq!(
-            resolve_dream_skin_style_preset("preset-cyber-neon", "dream-original"),
-            "cyber-neon"
-        );
-        assert_eq!(
-            resolve_dream_skin_style_preset("codex-snow-skin", ""),
-            "codex-snow"
-        );
-        assert_eq!(
-            resolve_dream_skin_style_preset("custom-theme", "dream-original"),
-            "dream-original"
-        );
-    }
 
     #[test]
     fn settings_store_update_persists_stepwise_settings() {

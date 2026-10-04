@@ -165,6 +165,7 @@ export class HostInstallFlow {
     this.progressInitialized = false;
     this.update({ phase: "download", error: null, progress: null, speedBytesPerSecond: 0, cancelRequested: false });
     let unlisten: (() => void) | undefined;
+    let installMessage: string | null = null;
     try {
       // Register before invoking so even the first download event is visible.
       unlisten = await this.dependencies.listenProgress((progress) => {
@@ -189,6 +190,7 @@ export class HostInstallFlow {
         this.update({ phase, progress, speedBytesPerSecond });
       });
       const result = await this.dependencies.invoke<HostInstallResult>("z8_install_host", { confirmed: true });
+      installMessage = result.message || null;
       if (!isSuccessfulStatus(result.status) || !result.installed) {
         const resumable = Boolean(result.resumable);
         this.update({
@@ -217,7 +219,10 @@ export class HostInstallFlow {
     this.update({ phase: "checking" });
     const installed = await this.check(true);
     if (!installed && this.state.host?.installed === false) {
-      this.update({ phase: "failed", error: "安装流程已结束，但仍未检测到 Codex 桌面版。请重试检测。" });
+      this.update({
+        phase: "failed",
+        error: installMessage || this.state.host.message || "安装流程已结束，但仍未检测到 Codex 桌面版。请重试检测。",
+      });
     }
     return installed;
   }

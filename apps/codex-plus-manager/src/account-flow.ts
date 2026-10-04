@@ -305,7 +305,12 @@ export function accountFailureMessage(message: string, preserveExistingAccount =
 
 /** Return the stable account error code without exposing server details. */
 export function accountErrorCode(message: string): string {
-  return message.trim().split(":", 1)[0] ?? "";
+  const normalized = message.trim();
+  const prefix = normalized.split(":", 1)[0] ?? "";
+  if (/^account_[a-z0-9_]+$/.test(prefix)) return prefix;
+  // The user-facing copy keeps the stable code after the Chinese label so
+  // the form can still associate a server failure with its inline field hint.
+  return normalized.match(/错误代码：\s*(account_[a-z0-9_]+)/i)?.[1]?.toLowerCase() ?? "";
 }
 
 /**

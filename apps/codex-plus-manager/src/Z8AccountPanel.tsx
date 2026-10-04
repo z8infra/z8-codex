@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   accountFailureMessage,
+  accountErrorCode,
   shouldResetCaptchaAfterFailure,
   AccountCommandResult,
   AccountAuthSettings,
@@ -47,6 +48,29 @@ type ProviderCheck = {
   model?: string;
   latencyMs?: number | null;
   error?: { code: string; message: string } | null;
+};
+
+type ImagegenStatus = {
+  configured: boolean;
+  managed: boolean;
+  keyId?: string | null;
+  baseUrl?: string | null;
+  model?: string | null;
+  models: string[];
+  modelsObservedAtMs?: number | null;
+  skillInstalled?: boolean;
+  skillEnabled?: boolean;
+  skillReady?: boolean;
+  skillManaged?: boolean;
+  skillVersion?: string | null;
+};
+
+type ImagegenModelsPayload = {
+  keyId: string;
+  baseUrl: string;
+  models: string[];
+  defaultModel?: string | null;
+  observedAtMs: number;
 };
 
 export function isProviderCheckHealthy(check: Pick<ProviderCheck, "status"> | null | undefined): boolean {
@@ -186,6 +210,7 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showUsageBalance, setShowUsageBalance] = useState(true);
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [redeemCode, setRedeemCode] = useState("");
@@ -209,11 +234,20 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
   const [busy, setBusy] = useState<string | null>(null);
   const [accountLoading, setAccountLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const authFeedbackRef = useRef<HTMLDivElement>(null);
   const [providerCheck, setProviderCheck] = useState<ProviderCheck | null>(null);
   const [usage, setUsage] = useState<UsageSnapshot | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState("");
   const [providerAppliedKey, setProviderAppliedKey] = useState<string | null>(null);
+  const [imagegenStatus, setImagegenStatus] = useState<ImagegenStatus | null>(null);
+  const [imagegenKey, setImagegenKey] = useState("");
+  const [imagegenModel, setImagegenModel] = useState("");
+  const [imagegenModels, setImagegenModels] = useState<string[]>([]);
+  const [imagegenModelsLoading, setImagegenModelsLoading] = useState(false);
+  const [imagegenError, setImagegenError] = useState("");
+  const [imagegenAppliedKey, setImagegenAppliedKey] = useState<string | null>(null);
+  const imagegenRequestId = useRef(0);
   const [captchaProof, setCaptchaProof] = useState<CaptchaProof | null>(null);
   const [captchaResetNonce, setCaptchaResetNonce] = useState(0);
   const [launchState, setLaunchState] = useState<LaunchState>("idle");
@@ -329,6 +363,103 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
     }
   };
 
+  const loadImagegenStatus = async () => {
+    // The manager owns the bundled install/repair path. Ensure it is present
+    // before a Key can be written to the skill configuration; this runs on
+    // the account panel and is idempotent for already installed/manual skills.
+    const ensured = await run<AccountCommandResult<ImagegenStatus>>("z8_imagegen_skill_ensure");
+    const result = ensured && isSuccessfulAccountCommand(ensured)
+      ? ensured
+      : await run<AccountCommandResult<ImagegenStatus>>("z8_imagegen_status");
+    if (!result || !isSuccessfulAccountCommand(result)) {
+      setImagegenError(result?.message?.trim() || "imagegen-Z8 skill 尚未安装，请点击重新安装。");
+      return;
+    }
+    setImagegenStatus(result);
+    setImagegenModels(result.models ?? []);
+    if (result.model) setImagegenModel(result.model);
+    if (ensured && !isSuccessfulAccountCommand(ensured)) {
+      setImagegenError(ensured.message?.trim() || "imagegen-Z8 skill 尚未安装，请点击重新安装。");
+    }
+  };
+
+  const refreshImagegenModels = async (keyId = imagegenKey): Promise<boolean> => {
+    if (!keyId) {
+      setImagegenError("请选择生图 API Key。");
+      return false;
+    }
+    const requestId = ++imagegenRequestId.current;
+    setImagegenModelsLoading(true);
+    setImagegenError("");
+    const result = await run<AccountCommandResult<ImagegenModelsPayload>>("z8_imagegen_models", { keyId });
+    if (requestId !== imagegenRequestId.current) return false;
+    if (!result || !isSuccessfulAccountCommand(result)) {
+      setImagegenModels([]);
+      setImagegenModel("");
+      setImagegenError(result?.message?.trim() || "生图模型列表暂不可用，请稍后重试。");
+      setImagegenModelsLoading(false);
+      return false;
+    }
+    const models = Array.isArray(result.models) ? result.models : [];
+    setImagegenModels(models);
+    setImagegenStatus((current) => ({
+      ...(current ?? { configured: false, managed: false, models: [] }),
+      keyId: result.keyId,
+      baseUrl: result.baseUrl,
+      models,
+      model: result.defaultModel || null,
+      modelsObservedAtMs: result.observedAtMs,
+    }));
+    setImagegenModel(result.defaultModel || "");
+    setImagegenModelsLoading(false);
+    if (!models.length) setImagegenError("中转站没有返回可用的生图模型。");
+    return models.length > 0;
+  };
+
+  const applyImagegen = async (keyId = imagegenKey) => {
+    if (!keyId) {
+      setImagegenError("请选择生图 API Key。");
+      return;
+    }
+    if (imagegenStatus && imagegenStatus.skillReady === false) {
+      setImagegenError("imagegen-Z8 skill 尚未就绪，请点击重新安装。");
+      return;
+    }
+    setImagegenError("");
+    const result = await run<AccountCommandResult<ImagegenStatus>>("z8_imagegen_apply", { keyId });
+    if (!result || !isSuccessfulAccountCommand(result)) {
+      setImagegenError(result?.message?.trim() || "imagegen-Z8 配置失败，请重试。");
+      return;
+    }
+    setImagegenStatus(result);
+    setImagegenKey(keyId);
+    setImagegenModels(result.models ?? []);
+    setImagegenModel(result.model || "");
+    setImagegenAppliedKey(keyId);
+    setNotice("imagegen-Z8 已配置，可调用生图");
+  };
+
+  const syncAndApplyImagegen = async (keyId: string) => {
+    const refreshed = await refreshImagegenModels(keyId);
+    if (refreshed) await applyImagegen(keyId);
+  };
+
+  const resetImagegen = async () => {
+    if (busy !== null) return;
+    if (!window.confirm("重置 imagegen-Z8 配置？这不会卸载 skill。")) return;
+    const result = await run<AccountCommandResult<ImagegenStatus>>("z8_imagegen_reset");
+    if (!result || !isSuccessfulAccountCommand(result)) {
+      setImagegenError(result?.message?.trim() || "重置 imagegen-Z8 配置失败，请重试。");
+      return;
+    }
+    setImagegenStatus(result);
+    setImagegenAppliedKey(null);
+    setImagegenModels([]);
+    setImagegenModel("");
+    setImagegenError("");
+    setNotice("imagegen-Z8 配置已重置");
+  };
+
   const commitAccount = (payload: Partial<AccountPayload> | null | undefined, preferredKey = selectedKey): AccountPayload => {
     const next = normalizeAccountPayload(payload);
     setAccount(next);
@@ -424,6 +555,7 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
   useEffect(() => {
     void loadAccount();
     void loadAuthSettings();
+    void loadImagegenStatus();
   }, []);
 
   useEffect(() => {
@@ -433,6 +565,15 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
       setUsageError("");
     }
   }, [account.authenticated, selectedKey]);
+
+  useEffect(() => {
+    if (!imagegenStatus) return;
+    if (!imagegenKey && imagegenStatus.keyId && usableKeys.some((key) => key.id === imagegenStatus.keyId)) {
+      setImagegenKey(imagegenStatus.keyId);
+    }
+    if (!imagegenModel && imagegenStatus.model) setImagegenModel(imagegenStatus.model);
+    if (!imagegenModels.length && imagegenStatus.models?.length) setImagegenModels(imagegenStatus.models);
+  }, [imagegenStatus, imagegenKey, imagegenModel, imagegenModels.length, usableKeys]);
 
   useEffect(() => {
     if (verificationCooldown <= 0) return;
@@ -677,13 +818,27 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
     setUsage(null);
     setUsageError("");
     setProviderAppliedKey(null);
+    setImagegenStatus(null);
+    setImagegenKey("");
+    setImagegenModel("");
+    setImagegenModels([]);
+    setImagegenAppliedKey(null);
+    setImagegenError("");
     resetLaunchState();
     setNotice(result.message);
   };
 
   const authModal = accountLoading || !account.authenticated;
+  const authNoticeCode = accountErrorCode(notice);
+  const invalidCredentialError = !registerMode && !pendingTwoFactor && authNoticeCode === "account_invalid_credentials";
+  const authNoticeIsError = Boolean(authNoticeCode) || /失败|错误|无效|请先|无法|暂未|过期|超时|不可用|未完成/.test(notice);
   const providerHealthy = isProviderCheckHealthy(providerCheck);
   const authTitleId = `${fieldId}-auth-title`;
+
+  useEffect(() => {
+    if (!notice || !authNoticeIsError || account.authenticated || accountLoading) return;
+    authFeedbackRef.current?.focus();
+  }, [notice, authNoticeIsError, account.authenticated, accountLoading]);
 
   const updateLaunchState = (next: LaunchState) => {
     launchStateRef.current = next;
@@ -730,6 +885,7 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
         setNotice("Codex 启动失败，请检查安装状态后重试。");
       } else {
         updateLaunchState("started");
+        setNotice("Codex 已启动");
       }
     } catch (error) {
       if (requestId !== launchRequestId.current) return;
@@ -777,16 +933,18 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
               {authSettingsLoading ? <p className="z8-auth-status" role="status">正在读取账户安全设置，请稍候。</p> : null}
               {captchaProvider.kind === "invalid" && !pendingTwoFactor ? <p className="z8-auth-status" role="alert">{captchaProvider.reason} 当前无法继续登录、注册或发送验证码。</p> : null}
               {agreement.kind === "unavailable" && !authSettingsLoading && !authSettingsError && !pendingTwoFactor ? <p className="z8-auth-status" role="alert">{agreement.reason}</p> : null}
+              {notice && !authSettingsError ? <div ref={authFeedbackRef} className="z8-account-notice z8-auth-feedback" role={authNoticeIsError ? "alert" : "status"} aria-live={authNoticeIsError ? "assertive" : "polite"} tabIndex={-1}><span>{notice}</span></div> : null}
               {!pendingTwoFactor ? <div className="z8-auth-fields">
                 <div className="field"><Label htmlFor={`${fieldId}-email`}>邮箱</Label><Input id={`${fieldId}-email`} value={email} onChange={(event) => {
                   const nextEmail = event.currentTarget.value;
                   setEmail(nextEmail);
+                  setNotice("");
                   if (verificationEmail && nextEmail.trim().toLowerCase() !== verificationEmail) {
                     setVerifyCode("");
                     setVerificationDialogOpen(false);
                   }
-                }} autoComplete="email" /></div>
-                <div className="field"><Label htmlFor={`${fieldId}-password`}>密码</Label><div className="z8-password-field"><Input id={`${fieldId}-password`} type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.currentTarget.value)} autoComplete={registerMode ? "new-password" : "current-password"} /><Button type="button" variant="ghost" size="icon" className="z8-password-toggle" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "隐藏密码" : "显示密码"}>{showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</Button></div></div>
+                }} autoComplete="email" aria-invalid={invalidCredentialError} aria-describedby={invalidCredentialError ? `${fieldId}-auth-credentials-error` : undefined} /></div>
+                <div className="field"><Label htmlFor={`${fieldId}-password`}>密码</Label><div className="z8-password-field"><Input id={`${fieldId}-password`} type={showPassword ? "text" : "password"} value={password} onChange={(event) => { setPassword(event.currentTarget.value); setNotice(""); }} autoComplete={registerMode ? "new-password" : "current-password"} aria-invalid={invalidCredentialError} aria-describedby={invalidCredentialError ? `${fieldId}-auth-credentials-error` : undefined} /><Button type="button" variant="ghost" size="icon" className="z8-password-toggle" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "隐藏密码" : "显示密码"}>{showPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</Button></div>{invalidCredentialError ? <p className="field-hint bad" id={`${fieldId}-auth-credentials-error`}>邮箱或密码错误，请检查后重试。</p> : null}</div>
                 {registerMode ? <div className="field"><Label htmlFor={`${fieldId}-confirm-password`}>确认密码</Label><div className="z8-password-field"><Input id={`${fieldId}-confirm-password`} type={showConfirmPassword ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.currentTarget.value)} autoComplete="new-password" aria-invalid={confirmPassword.length > 0 && password !== confirmPassword} /><Button type="button" variant="ghost" size="icon" className="z8-password-toggle" onClick={() => setShowConfirmPassword((value) => !value)} aria-label={showConfirmPassword ? "隐藏确认密码" : "显示确认密码"}>{showConfirmPassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</Button></div>{confirmPassword.length > 0 && password !== confirmPassword ? <p className="field-hint bad">两次输入的密码不一致。</p> : null}</div> : null}
               </div> : null}
               {captchaWidgetProvider && !pendingTwoFactor && !verificationStepActive ? <div className="z8-auth-captcha"><CaptchaChallenge provider={captchaWidgetProvider} resetNonce={captchaResetNonce} onProof={handleCaptchaProof} /></div> : null}
@@ -838,40 +996,52 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
             <div className="z8-account-shell">
               <header className="z8-account-toolbar">
                 <div><p className="z8-account-eyebrow">Z8 ACCOUNT</p><h2>Z8 账户</h2></div>
-                <div className="z8-account-toolbar-actions">
-                  <Button variant="secondary" disabled={busy !== null} onClick={() => void refreshAccount("z8_refresh_session")} title="刷新账户会话"><RefreshCw aria-hidden="true" />刷新</Button>
-                  <Button ref={redeemTriggerRef} variant="secondary" className="z8-recharge-trigger" disabled={busy !== null} onClick={() => redeemDialogRef.current?.showModal()} title="充值或兑换权益"><CreditCard aria-hidden="true" />充值</Button>
-                </div>
-              </header>
-              <div className="z8-account-columns">
-                <div className="z8-account-column z8-account-left">
-                  <section className="z8-account-banner" aria-label="账户状态">
+                <div className="z8-account-toolbar-side">
+                  <section className="z8-account-compact" aria-label="账户状态">
                     <div className="z8-account-avatar" aria-hidden="true"><UserRound /></div>
                     <div className="z8-account-identity"><strong>{account.email ?? "已登录"}</strong><span><span className="z8-account-status-dot" aria-hidden="true" />账户正常</span></div>
                     <Button variant="ghost" disabled={busy !== null} onClick={() => void logout()} title="退出 Z8 账户"><LogOut aria-hidden="true" />退出</Button>
                   </section>
-                  <section className="z8-provider-section z8-key-section" aria-labelledby={`${fieldId}-provider-heading`}>
-                    <div className="z8-section-heading"><div><h3 id={`${fieldId}-provider-heading`}>选择 API Key</h3><p>选择后立即写入 Z8 Provider</p></div><div className="z8-section-heading-actions"><Button variant="outline" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleCheck()} title="检查 Z8 Provider"><Activity aria-hidden="true" />检查</Button><Button variant="outline" disabled={busy !== null || !onReset} onClick={() => void handleReset()} title="恢复 Z8 默认供应商配置"><RotateCcw aria-hidden="true" />重置配置</Button></div></div>
-                    {account.keys.length ? <div className="z8-key-select-row"><KeyRound aria-hidden="true" /><Label htmlFor={`${fieldId}-key`} className="sr-only">API Key</Label><select id={`${fieldId}-key`} value={selectedKey} onChange={(event) => { const nextKey = event.currentTarget.value; resetLaunchState(); setSelectedKey(nextKey); setProviderCheck(null); setProviderAppliedKey(null); void handleApply(nextKey); }} disabled={busy !== null || launchState === "starting"}><option value="" disabled>请选择 API Key</option>{account.keys.map((key) => <option key={key.id} value={key.id} disabled={!isUsableApiKey(key)}>{key.name} · {key.secret.masked} · {key.status}</option>)}</select><Button variant="secondary" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleApply()} title="应用当前 API Key"><Check aria-hidden="true" />使用</Button></div> : <p className="field-hint">当前账户没有可用 API Key，请先兑换或刷新。</p>}
-                    {providerAppliedKey === selectedKey && selectedKey || providerCheck ? (
-                      <div className="z8-provider-status-row" aria-live="polite">
-                        {providerAppliedKey === selectedKey && selectedKey ? <p className="field-hint good z8-provider-applied" role="status">已写入 Z8 Provider，可启动 Codex。</p> : <span aria-hidden="true" />}
-                        {providerCheck ? <p role="status" className={`z8-provider-health ${providerCheck.status === "ok" || providerCheck.status === "healthy" ? "good" : "bad"}`}>{providerCheck.message}{providerCheck.latencyMs ? ` · ${providerCheck.latencyMs}ms` : ""}</p> : <span aria-hidden="true" />}
-                      </div>
-                    ) : null}
+                  <div className="z8-account-toolbar-actions">
+                    <Button variant="secondary" disabled={busy !== null} onClick={() => void refreshAccount("z8_refresh_session")} title="刷新账户会话"><RefreshCw aria-hidden="true" />刷新</Button>
+                    <Button ref={redeemTriggerRef} variant="secondary" className="z8-recharge-trigger" disabled={busy !== null} onClick={() => redeemDialogRef.current?.showModal()} title="充值或兑换权益"><CreditCard aria-hidden="true" />充值</Button>
+                  </div>
+                </div>
+              </header>
+              <div className="z8-account-columns">
+                <div className="z8-account-column z8-account-left">
+                  <section className="z8-provider-section z8-key-section z8-key-groups" aria-labelledby={`${fieldId}-keys-heading`}>
+                    <div className="z8-section-heading"><div><h3 id={`${fieldId}-keys-heading`}>API Key</h3></div></div>
+                    <div className="z8-key-group">
+                      <div className="z8-key-group-heading"><h4>编程多模态</h4><div className="z8-section-heading-actions z8-key-group-heading-actions"><Button variant="outline" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleCheck()} title="检查 Z8 Provider"><Activity aria-hidden="true" />检查</Button><Button variant="outline" disabled={busy !== null || !onReset} onClick={() => void handleReset()} title="恢复 Z8 默认供应商配置"><RotateCcw aria-hidden="true" />重置配置</Button></div></div>
+                      {account.keys.length ? <div className="z8-key-select-row"><KeyRound aria-hidden="true" /><Label htmlFor={`${fieldId}-key`} className="sr-only">编程 / 多模态 API Key</Label><select id={`${fieldId}-key`} value={selectedKey} onChange={(event) => { const nextKey = event.currentTarget.value; resetLaunchState(); setSelectedKey(nextKey); setProviderCheck(null); setProviderAppliedKey(null); void handleApply(nextKey); }} disabled={busy !== null || launchState === "starting"}><option value="" disabled>请选择编程 / 多模态 API Key</option>{account.keys.map((key) => <option key={key.id} value={key.id} disabled={!isUsableApiKey(key)}>{key.name} · {key.secret.masked} · {key.status}</option>)}</select><Button variant="secondary" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleApply()} title="应用当前 API Key"><Check aria-hidden="true" />使用</Button></div> : <p className="field-hint">当前账户没有可用 API Key，请先兑换或刷新。</p>}
+                      {providerAppliedKey === selectedKey && selectedKey || providerCheck ? (
+                        <div className="z8-provider-status-row" aria-live="polite">
+                          {providerAppliedKey === selectedKey && selectedKey ? <p className="field-hint good z8-provider-applied" role="status">写入成功</p> : <span aria-hidden="true" />}
+                          {providerCheck ? <p role="status" className={`z8-provider-health ${providerCheck.status === "ok" || providerCheck.status === "healthy" ? "good" : "bad"}`}>{providerCheck.message}{providerCheck.latencyMs ? ` · ${providerCheck.latencyMs}ms` : ""}</p> : <span aria-hidden="true" />}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="z8-key-group z8-imagegen-group">
+                      <div className="z8-key-group-heading"><h4 id={`${fieldId}-imagegen-heading`}>生图</h4><div className="z8-section-heading-actions z8-imagegen-heading-actions"><Button variant="outline" disabled={busy !== null || imagegenModelsLoading || !imagegenKey || imagegenStatus?.skillReady === false} onClick={() => void syncAndApplyImagegen(imagegenKey)} title="自动配置 imagegen-Z8"><RefreshCw aria-hidden="true" />自动配置</Button><Button variant="outline" disabled={busy !== null || !imagegenStatus?.managed} onClick={() => void resetImagegen()} title="重置 imagegen-Z8 配置"><RotateCcw aria-hidden="true" />重置配置</Button></div></div>
+                      {imagegenStatus?.skillReady === false ? <div className="z8-imagegen-skill-warning"><p className="field-hint bad" role="alert">imagegen-Z8 skill 尚未就绪，生图 Key 暂时不能写入。</p><Button variant="secondary" disabled={busy !== null} onClick={() => void run<AccountCommandResult<ImagegenStatus>>("z8_imagegen_skill_repair").then((result) => { if (result && isSuccessfulAccountCommand(result)) { setImagegenStatus(result); setImagegenError(""); setNotice("imagegen-Z8 skill 已重新安装"); } else if (result) setImagegenError(result.message || "重新安装 imagegen-Z8 skill 失败"); })} title="重新安装 imagegen-Z8 skill"><RotateCcw aria-hidden="true" />重新安装 skill</Button></div> : null}
+                      {usableKeys.length ? <div className="z8-key-select-row"><KeyRound aria-hidden="true" /><Label htmlFor={`${fieldId}-imagegen-key`} className="sr-only">生图 API Key</Label><select id={`${fieldId}-imagegen-key`} value={imagegenKey} onChange={(event) => { const nextKey = event.currentTarget.value; setImagegenKey(nextKey); setImagegenModel(""); setImagegenModels([]); setImagegenAppliedKey(null); setImagegenError(""); void syncAndApplyImagegen(nextKey); }} disabled={busy !== null || imagegenModelsLoading || imagegenStatus?.skillReady === false}><option value="" disabled>请选择生图 API Key</option>{account.keys.map((key) => <option key={key.id} value={key.id} disabled={!isUsableApiKey(key)}>{key.name} · {key.secret.masked} · {key.status}</option>)}</select><Button variant="secondary" disabled={busy !== null || imagegenModelsLoading || !imagegenKey || imagegenStatus?.skillReady === false} onClick={() => void syncAndApplyImagegen(imagegenKey)} title="应用当前生图 API Key"><Check aria-hidden="true" />使用</Button></div> : <p className="field-hint">当前账户没有可用 API Key，请先兑换或刷新。</p>}
+                      {imagegenModels.length ? <details className="z8-imagegen-catalog"><summary>已同步模型目录（{imagegenModels.length} 个）</summary><p>{imagegenModels.join("、")}</p></details> : null}
+                      {imagegenError ? <p className="field-hint bad" role="alert">{imagegenError}</p> : imagegenAppliedKey === imagegenKey && imagegenKey && imagegenStatus?.configured ? <p className="field-hint good" role="status">已写入 imagegen-Z8，可调用生图。</p> : imagegenStatus?.configured ? <p className="field-hint good" role="status">已配置 imagegen-Z8，可调用生图。</p> : null}
+                    </div>
+                    <div className="z8-account-primary-actions">
+                      <Button className="z8-account-launch-inline" disabled={launchButtonDisabled} onClick={() => void handleLaunch()} title={launchState === "failed" ? "重试启动 Z8 Codex" : "启动 Z8 Codex"} aria-busy={launchState === "starting"}>
+                        {launchState === "starting" ? <RefreshCw style={{ animation: "spin 850ms linear infinite" }} aria-hidden="true" /> : launchState === "started" ? <Check aria-hidden="true" /> : <Rocket aria-hidden="true" />}
+                        {launchButtonLabel}
+                      </Button>
+                    </div>
                   </section>
-                  <footer className="z8-account-primary-actions">
-                    <Button disabled={launchButtonDisabled} onClick={() => void handleLaunch()} title={launchState === "failed" ? "重试启动 Z8 Codex" : "启动 Z8 Codex"} aria-busy={launchState === "starting"}>
-                      {launchState === "starting" ? <RefreshCw style={{ animation: "spin 850ms linear infinite" }} aria-hidden="true" /> : launchState === "started" ? <Check aria-hidden="true" /> : <Rocket aria-hidden="true" />}
-                      {launchButtonLabel}
-                    </Button>
-                  </footer>
                 </div>
                 <section className="z8-usage-section z8-account-column z8-account-right" aria-labelledby={`${fieldId}-usage-heading`}>
                   <div className="z8-section-heading"><div><h3 id={`${fieldId}-usage-heading`}>余额与用量</h3><p>统计来自当前 API Key</p></div><span className="z8-usage-updated">{usage ? `更新于 ${new Date(usage.observedAtMs).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "等待同步"}</span></div>
                   {usageLoading ? <p className="field-hint" role="status">正在读取账户用量…</p> : usageError ? <p className="field-hint" role="alert">{usageError}</p> : usage ? (
                     <>
-                      <div className="z8-usage-balance"><span>可用余额</span><strong>{usage.isUnlimited ? "不限" : formatUsageAmount(usage.remaining ?? usage.balance ?? usage.quota?.remaining, usage.unit ?? usage.quota?.unit)}</strong><small>{usage.accountStatus || (usage.isValid === false ? "账户不可用" : "已同步")}</small></div>
+                      <div className="z8-usage-balance"><div className="z8-usage-balance-label"><span>可用余额</span><Button type="button" variant="ghost" size="icon" className="z8-usage-balance-toggle" onClick={() => setShowUsageBalance((value) => !value)} aria-label={showUsageBalance ? "隐藏余额" : "显示余额"} aria-pressed={!showUsageBalance} title={showUsageBalance ? "隐藏余额" : "显示余额"}>{showUsageBalance ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}</Button></div><strong>{showUsageBalance ? (usage.isUnlimited ? "不限" : formatUsageAmount(usage.remaining ?? usage.balance ?? usage.quota?.remaining, usage.unit ?? usage.quota?.unit)) : "••••"}</strong><small>{usage.accountStatus || (usage.isValid === false ? "账户不可用" : "已同步")}</small></div>
                       <div className="z8-usage-metrics" aria-label="账户用量统计">
                         <div><span>今日请求</span><strong>{formatUsageNumber(usage.usage?.today?.requests)}</strong></div>
                         <div><span>今日 Token</span><strong>{formatUsageNumber(usage.usage?.today?.totalTokens)}</strong></div>
@@ -880,11 +1050,11 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
                       <p className="z8-usage-summary">累计 {formatUsageNumber(usage.usage?.total?.requests)} 次请求 · {formatUsageNumber(usage.usage?.total?.totalTokens)} Token · 实际消耗 {formatUsageAmount(usage.usage?.total?.actualCost ?? usage.usage?.total?.cost, usage.unit)}</p>
                     </>
                   ) : <p className="field-hint">暂无用量数据，请先选择可用的 API Key。</p>}
+                  {account.authenticated && notice ? <div className="z8-account-notice z8-usage-notice" role="status" aria-live="polite">{notice}</div> : null}
                 </section>
               </div>
             </div>
           )}
-          {notice ? <div className="z8-account-notice" role={account.authenticated ? "status" : "alert"} aria-live="polite">{notice}</div> : null}
         </CardContent>
       </Card>
       </div>

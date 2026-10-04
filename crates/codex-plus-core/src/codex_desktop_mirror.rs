@@ -33,7 +33,9 @@ const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_MSIX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PART_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_PARTS: usize = 64;
+// Keep a bounded manifest while leaving room for desktop package growth.
+// MAX_ARTIFACT_BYTES remains the aggregate size limit.
+const MAX_PARTS: usize = 256;
 const DOWNLOAD_CONCURRENCY: usize = 4;
 // A single part can take several minutes on a constrained connection when
 // four parts share the available bandwidth.  The previous request timeout
@@ -44,6 +46,8 @@ const DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_DOWNLOAD_ATTEMPTS: usize = 3;
 const DOWNLOAD_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
+#[cfg(windows)]
+const ELEVATED_COMMAND_MARKER: &str = "__Z8_CODEX_DESKTOP_ELEVATED_COMMAND__";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DesktopMirrorTarget {
@@ -116,6 +120,32 @@ pub struct MissingMirrorAsset {
 #[derive(Debug, thiserror::Error)]
 #[error("Codex Desktop installation cancelled")]
 pub struct MirrorInstallCancelled;
+
+/// The Windows package command ran, but AppX rejected the package. Keep this
+/// typed so the manager can show a useful recovery message without exposing
+/// PowerShell output or local paths in the WebView.
+#[derive(Debug, thiserror::Error)]
+#[error("Windows rejected Codex Desktop installation")]
+pub struct WindowsPackageInstallError {
+    pub exit_code: Option<i32>,
+    pub hresult: Option<String>,
+}
+
+impl WindowsPackageInstallError {
+    pub fn requires_admin(&self) -> bool {
+        self.hresult
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("0X80073D28"))
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.exit_code == Some(1223)
+            || self
+                .hresult
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case("0X800704C7"))
+    }
+}
 
 fn download_cache_root() -> PathBuf {
     directories::BaseDirs::new()
@@ -630,7 +660,16 @@ where
         completed,
         total: asset.size_bytes,
     });
-    installer.install(&temp.package).await?;
+    if let Err(error) = installer.install(&temp.package).await {
+        // Add-AppxPackage can fail after the download has been fully verified
+        // (for example because Windows still has a stale package registration,
+        // a file is locked, or deployment needs to be retried). Put the
+        // finalized package back in the resumable slot so a retry performs
+        // validation and installation without downloading hundreds of MB
+        // again.
+        preserve_failed_install(&temp);
+        return Err(error);
+    }
     temp.remove_completed();
     progress(MirrorProgress {
         phase: MirrorPhase::Complete,
@@ -1147,6 +1186,21 @@ impl DownloadPackage {
     }
 }
 
+fn preserve_failed_install(package: &DownloadPackage) {
+    if !package.package.is_file() || package.partial.exists() {
+        return;
+    }
+    if fs::rename(&package.package, &package.partial).is_ok() {
+        return;
+    }
+    // A security scanner or Windows deployment service can briefly hold the
+    // finalized file open. Copying gives the next attempt a resumable package
+    // even when the atomic rename is temporarily unavailable.
+    if fs::copy(&package.package, &package.partial).is_ok() {
+        let _ = fs::remove_file(&package.package);
+    }
+}
+
 impl Drop for DownloadPackage {
     fn drop(&mut self) {
         let keep_partial = fs::metadata(&self.partial)
@@ -1279,15 +1333,193 @@ fn validate_identity_attributes(
     Ok(())
 }
 
+#[cfg(any(windows, test))]
+const WINDOWS_ELEVATED_INSTALL_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+
+function Write-Z8InstallResult {
+    param(
+        [string]$Status,
+        [int]$ExitCode,
+        [string]$HResult
+    )
+    $resultPath = $env:Z8_CODEX_DESKTOP_RESULT
+    if ([string]::IsNullOrWhiteSpace($resultPath)) {
+        return
+    }
+    $payload = [ordered]@{
+        status = $Status
+        exitCode = $ExitCode
+        hresult = if ([string]::IsNullOrWhiteSpace($HResult)) { $null } else { $HResult }
+    }
+    [IO.File]::WriteAllText(
+        $resultPath,
+        ($payload | ConvertTo-Json -Compress),
+        [Text.UTF8Encoding]::new($false)
+    )
+}
+
+function Get-Z8HResult {
+    param($ErrorRecord)
+    $current = $ErrorRecord.Exception
+    while ($null -ne $current) {
+        if ($current.HResult -ne 0) {
+            return ('0X{0}' -f ('{0:X8}' -f $current.HResult))
+        }
+        $current = $current.InnerException
+    }
+    return $null
+}
+
+$packages = @(Get-AppxPackage -Name 'OpenAI.Codex')
+foreach ($package in $packages) {
+    $location = [string]$package.InstallLocation
+    $manifest = if ([string]::IsNullOrWhiteSpace($location)) { $null } else { Join-Path $location 'AppxManifest.xml' }
+    if ([string]::IsNullOrWhiteSpace($location) -or -not (Test-Path -LiteralPath $manifest)) {
+        Remove-AppxPackage -Package $package.PackageFullName -ErrorAction Stop
+        continue
+    }
+    # A healthy package is already usable. The manager checks this before
+    # starting installation, but treating it as success also makes the
+    # command safe when two windows race.
+    Write-Output 'Z8_CODEX_DESKTOP_ALREADY_INSTALLED'
+    Write-Z8InstallResult 'ok' 0 $null
+    exit 0
+}
+try {
+    Add-AppxPackage -Path $env:Z8_CODEX_DESKTOP_MSIX -ErrorAction Stop
+    Write-Z8InstallResult 'ok' 0 $null
+} catch {
+    Write-Z8InstallResult 'failed' 1 (Get-Z8HResult $_)
+    throw
+}
+"#;
+
+#[cfg(any(windows, test))]
+const WINDOWS_INSTALL_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+
+function Write-Z8InstallResult {
+    param(
+        [string]$Status,
+        [int]$ExitCode,
+        [string]$HResult
+    )
+    $resultPath = $env:Z8_CODEX_DESKTOP_RESULT
+    if ([string]::IsNullOrWhiteSpace($resultPath)) {
+        return
+    }
+    $payload = [ordered]@{
+        status = $Status
+        exitCode = $ExitCode
+        hresult = if ([string]::IsNullOrWhiteSpace($HResult)) { $null } else { $HResult }
+    }
+    [IO.File]::WriteAllText(
+        $resultPath,
+        ($payload | ConvertTo-Json -Compress),
+        [Text.UTF8Encoding]::new($false)
+    )
+}
+
+function Test-Z8Elevated {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+function Test-Z8AdminRequired {
+    param($ErrorRecord)
+    # PowerShell often keeps the deployment HRESULT on Exception.HResult
+    # without rendering it in the error text. Check the exception chain as
+    # well as the text so the UAC retry is not skipped on localized systems.
+    $current = $ErrorRecord.Exception
+    while ($null -ne $current) {
+        if (('{0:X8}' -f $current.HResult) -eq '80073D28') {
+            return $true
+        }
+        $current = $current.InnerException
+    }
+    return ([string]$ErrorRecord) -match '(?i)0x80073D28|ERROR_PACKAGED_SERVICE_REQUIRES_ADMIN_PRIVILEGES'
+}
+function Invoke-Z8Install {
+    $packages = @(Get-AppxPackage -Name 'OpenAI.Codex')
+    foreach ($package in $packages) {
+        $location = [string]$package.InstallLocation
+        $manifest = if ([string]::IsNullOrWhiteSpace($location)) { $null } else { Join-Path $location 'AppxManifest.xml' }
+        if ([string]::IsNullOrWhiteSpace($location) -or -not (Test-Path -LiteralPath $manifest)) {
+            Remove-AppxPackage -Package $package.PackageFullName -ErrorAction Stop
+            continue
+        }
+        # A healthy package is already usable. The manager checks this before
+        # starting installation, but treating it as success also makes the
+        # command safe when two windows race.
+        Write-Output 'Z8_CODEX_DESKTOP_ALREADY_INSTALLED'
+        return
+    }
+    Add-AppxPackage -Path $env:Z8_CODEX_DESKTOP_MSIX -ErrorAction Stop
+}
+try {
+    Invoke-Z8Install
+} catch {
+    # AppX deployment can require elevation for a packaged system service or
+    # for removing a stale registration. Retry only for this exact Windows
+    # deployment error; normal installation remains non-elevated.
+    if (-not (Test-Z8Elevated) -and (Test-Z8AdminRequired $_)) {
+        $child = Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @(
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-EncodedCommand',
+            '__Z8_CODEX_DESKTOP_ELEVATED_COMMAND__'
+        )
+        if ($child.ExitCode -eq 0) {
+            exit 0
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:Z8_CODEX_DESKTOP_RESULT) -and
+            -not (Test-Path -LiteralPath $env:Z8_CODEX_DESKTOP_RESULT)) {
+            Write-Z8InstallResult 'failed' $child.ExitCode '0X80073D28'
+        }
+        throw "Elevated Codex Desktop installation failed with exit code $($child.ExitCode)."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:Z8_CODEX_DESKTOP_RESULT) -and
+        -not (Test-Path -LiteralPath $env:Z8_CODEX_DESKTOP_RESULT)) {
+        Write-Z8InstallResult 'failed' 1 $null
+    }
+    throw
+}
+"#;
+
 #[cfg(windows)]
 async fn install_verified_msix(path: &Path) -> Result<()> {
     // The package path is supplied only through an environment variable. No
     // untrusted path is ever interpolated into PowerShell source. Windows
     // validates the MSIX signature and publisher as part of Add-AppxPackage.
-    const SCRIPT: &str = "$ErrorActionPreference='Stop'; if (Get-AppxPackage -Name 'OpenAI.Codex') { throw 'Codex Desktop is already installed' }; Add-AppxPackage -Path $env:Z8_CODEX_DESKTOP_MSIX -ErrorAction Stop";
+    let package_token = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        path.to_string_lossy().as_bytes(),
+    );
+    let result_path = std::env::temp_dir().join(format!(
+        "z8-codex-desktop-install-{}.json",
+        uuid::Uuid::new_v4()
+    ));
+    let _ = fs::remove_file(&result_path);
+    let result_token = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        result_path.to_string_lossy().as_bytes(),
+    );
+    let elevated_script = format!(
+        "$env:Z8_CODEX_DESKTOP_MSIX = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{package_token}'))\n$env:Z8_CODEX_DESKTOP_RESULT = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{result_token}'))\n{WINDOWS_ELEVATED_INSTALL_SCRIPT}"
+    );
+    let elevated_encoded = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        elevated_script
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    let install_script = WINDOWS_INSTALL_SCRIPT.replace(ELEVATED_COMMAND_MARKER, &elevated_encoded);
     let encoded = base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
-        SCRIPT
+        install_script
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
             .collect::<Vec<_>>(),
@@ -1301,14 +1533,68 @@ async fn install_verified_msix(path: &Path) -> Result<()> {
             &encoded,
         ])
         .env("Z8_CODEX_DESKTOP_MSIX", path)
+        .env("Z8_CODEX_DESKTOP_RESULT", &result_path)
+        .creation_flags(crate::windows_create_no_window())
         .output()
-        .await
-        .context("cannot start Windows package installer")?;
-    ensure!(
-        output.status.success(),
-        "Windows rejected Codex Desktop installation"
-    );
+        .await;
+    let result_file = fs::read_to_string(&result_path).ok();
+    let _ = fs::remove_file(&result_path);
+    let output = output.context("cannot start Windows package installer")?;
+    if !output.status.success() {
+        let elevated_result = result_file
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<WindowsInstallResult>(value).ok());
+        let hresult = elevated_result
+            .as_ref()
+            .and_then(|value| value.hresult.clone())
+            .or_else(|| extract_hresult(&output.stderr))
+            .or_else(|| extract_hresult(&output.stdout));
+        let exit_code = elevated_result
+            .and_then(|value| value.exit_code)
+            .or_else(|| output.status.code());
+        let _ = crate::diagnostic_log::append_diagnostic_log(
+            "codex_desktop_mirror.windows_install_failed",
+            serde_json::json!({
+                "exit_code": exit_code,
+                "hresult": hresult,
+                "stderr_bytes": output.stderr.len(),
+                "stdout_bytes": output.stdout.len(),
+            }),
+        );
+        return Err(WindowsPackageInstallError {
+            exit_code,
+            hresult,
+        }
+        .into());
+    }
     Ok(())
+}
+
+#[cfg(windows)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowsInstallResult {
+    #[allow(dead_code)]
+    status: String,
+    exit_code: Option<i32>,
+    hresult: Option<String>,
+}
+
+#[cfg(any(windows, test))]
+fn extract_hresult(output: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(output);
+    text.split(|character: char| {
+        !character.is_ascii_hexdigit() && character != 'x' && character != 'X'
+    })
+    .find_map(|token| {
+        if token.len() != 10 || !token[..2].eq_ignore_ascii_case("0x") {
+            return None;
+        }
+        token[2..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+            .then(|| token.to_ascii_uppercase())
+    })
 }
 
 #[cfg(not(windows))]
@@ -2101,6 +2387,111 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn failed_install_keeps_verified_package_for_install_only_retry() {
+        let bytes = msix("OpenAI.Codex", "CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B");
+        let (client, endpoint, server) = fixture_server(&bytes, |_| {}).await;
+        let cache = tempfile::tempdir().unwrap();
+        let failed = RecordingInstaller::new(true);
+        assert!(install_target_with_cancel(
+            &client,
+            &endpoint,
+            DesktopMirrorTarget::WindowsX64,
+            &failed,
+            |_| {},
+            &MirrorInstallControl::default(),
+            cache.path(),
+        )
+        .await
+        .is_err());
+        let partial = cache
+            .path()
+            .join(DesktopMirrorTarget::WindowsX64.as_str())
+            .join(digest(&bytes))
+            .join(format!("{ASSET_FILENAME}.partial"));
+        assert!(partial.is_file());
+        let part_requests_before_retry = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path().contains(".part-"))
+            .count();
+        assert_eq!(part_requests_before_retry, 2);
+
+        let successful = RecordingInstaller::new(false);
+        install_target_with_cancel(
+            &client,
+            &endpoint,
+            DesktopMirrorTarget::WindowsX64,
+            &successful,
+            |_| {},
+            &MirrorInstallControl::default(),
+            cache.path(),
+        )
+        .await
+        .unwrap();
+        let part_requests_after_retry = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path().contains(".part-"))
+            .count();
+        assert_eq!(part_requests_after_retry, part_requests_before_retry);
+        assert!(!partial.exists());
+    }
+
+    #[test]
+    fn windows_installer_repairs_stale_registration_instead_of_failing_as_already_installed() {
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("Get-AppxPackage -Name 'OpenAI.Codex'"));
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("Remove-AppxPackage"));
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("AppxManifest.xml"));
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("Add-AppxPackage"));
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("Start-Process -FilePath 'powershell.exe' -Verb RunAs"));
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("0x80073D28"));
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("$ErrorRecord.Exception"));
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("{0:X8}"));
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("Z8_CODEX_DESKTOP_RESULT"));
+        assert!(WINDOWS_INSTALL_SCRIPT.contains("__Z8_CODEX_DESKTOP_ELEVATED_COMMAND__"));
+        assert!(WINDOWS_ELEVATED_INSTALL_SCRIPT.contains("Write-Z8InstallResult"));
+        assert!(WINDOWS_ELEVATED_INSTALL_SCRIPT.contains("Remove-AppxPackage"));
+        assert!(!WINDOWS_INSTALL_SCRIPT.contains("throw 'Codex Desktop is already installed'"));
+    }
+
+    #[test]
+    fn admin_required_hresult_is_classified_without_exposing_output() {
+        let error = WindowsPackageInstallError {
+            exit_code: Some(1),
+            hresult: Some("0X80073D28".into()),
+        };
+        assert!(error.requires_admin());
+        assert!(!WindowsPackageInstallError {
+            exit_code: Some(1),
+            hresult: Some("0X80073CFB".into()),
+        }
+        .requires_admin());
+        assert!(WindowsPackageInstallError {
+            exit_code: Some(1223),
+            hresult: None,
+        }
+        .cancelled());
+        assert!(WindowsPackageInstallError {
+            exit_code: Some(1),
+            hresult: Some("0X800704C7".into()),
+        }
+        .cancelled());
+    }
+
+    #[test]
+    fn extracts_windows_hresult_without_logging_local_paths() {
+        assert_eq!(
+            extract_hresult(b"Deployment failed with HRESULT 0x80073CFB."),
+            Some("0X80073CFB".into())
+        );
+        assert_eq!(extract_hresult(b"no HRESULT"), None);
+    }
+
     #[test]
     fn production_entry_is_pinned_to_public_origin() {
         let endpoint = MirrorEndpoint::production();
@@ -2205,6 +2596,53 @@ mod tests {
                 .to_string()
                 .contains("untrusted")
         );
+    }
+
+    #[test]
+    fn manifest_accepts_more_than_sixty_four_parts() {
+        let endpoint = MirrorEndpoint::production();
+        let payload: Vec<u8> = (0..65).collect();
+        let parts: Vec<_> = payload
+            .iter()
+            .enumerate()
+            .map(|(index, byte)| {
+                let chunk = [*byte];
+                let filename = format!("{ASSET_FILENAME}.part-{index:04}");
+                json!({
+                    "filename": filename,
+                    "mirrorUrl": endpoint.part_url("future-desktop", &filename),
+                    "sizeBytes": chunk.len(),
+                    "sha256": digest(&chunk),
+                    "encoding": "identity",
+                    "decodedSizeBytes": chunk.len(),
+                })
+            })
+            .collect();
+        let manifest = json!({
+            "schemaVersion": 3,
+            "mirrorProvider": "cloudflare_r2",
+            "upstreamRepository": "openai/codex",
+            "tag": "future-desktop",
+            "version": "26.930.2377.0",
+            "upstreamReleaseUrl": "https://openai.com/codex/for-work/",
+            "mirrorRepository": "z8hk/codex-mirror",
+            "generatedAt": "2026-10-03T00:00:00Z",
+            "assets": [{
+                "filename": ASSET_FILENAME,
+                "upstreamUrl": "https://get.microsoft.com/installer/download/9PLM9XGG6VKS",
+                "sizeBytes": payload.len(),
+                "sha256": digest(&payload),
+                "parts": parts,
+            }]
+        });
+        let parsed: MirrorManifest = serde_json::from_value(manifest).unwrap();
+
+        assert!(validate_manifest(
+            &parsed,
+            &endpoint,
+            DesktopMirrorTarget::WindowsX64
+        )
+        .is_ok());
     }
 
     #[test]

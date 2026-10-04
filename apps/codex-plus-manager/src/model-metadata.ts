@@ -41,16 +41,48 @@ function filteredMetadata(metadata: ModelMetadata): ModelMetadata {
   );
 }
 
+/** Use the same identity as Rust: valid window suffix removed, ASCII case folded. */
+export function modelMetadataKey(rowName: string): string {
+  return modelSlugFromRowName(rowName).replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+function modelRowIdentity(rowName: string): { slug: string; window: string | null } {
+  const trimmed = rowName.trim();
+  const open = trimmed.lastIndexOf("[");
+  if (trimmed.endsWith("]") && open > 0) {
+    const slug = trimmed.slice(0, open).trim();
+    const token = trimmed.slice(open + 1, -1).trim();
+    // Rust's numeric parser also accepts leading + and whitespace before K/M.
+    const normalized = token.replace(/^\+/, "").replace(/\s+([KkMm])$/, "$1");
+    const tokens = contextWindowToBigInt(normalized);
+    if (slug && tokens !== null) return { slug, window: String(tokens) };
+  }
+  return { slug: trimmed, window: null };
+}
+
+export function modelSlugFromRowName(rowName: string): string {
+  return modelRowIdentity(rowName).slug;
+}
+
+export function suffixWindowString(rowName: string): string | null {
+  return modelRowIdentity(rowName).window;
+}
+
 export function parseModelMetadataMap(value: string): ModelMetadataMap {
   if (!value.trim()) return {};
   try {
     const parsed: unknown = JSON.parse(value);
     if (!isRecord(parsed)) return {};
-    return Object.fromEntries(
+    const canonical = Object.fromEntries(
       Object.entries(parsed)
         .filter((entry): entry is [string, ModelMetadata] => isRecord(entry[1]))
-        .map(([slug, metadata]) => [slug, filteredMetadata(metadata)] as [string, ModelMetadata])
-        .filter(([, metadata]) => Object.keys(metadata).length > 0),
+        .map(([slug, metadata]) => [modelMetadataKey(slug), filteredMetadata(metadata)] as [string, ModelMetadata])
+        .filter(([slug]) => Boolean(slug)),
+    );
+    // Resolve variants before dropping empty overrides, so a later empty entry
+    // cannot accidentally resurrect metadata from an earlier spelling.
+    return Object.fromEntries(
+      Object.entries(canonical).filter(([, metadata]) => Object.keys(metadata).length > 0),
     );
   } catch {
     return {};
@@ -138,7 +170,7 @@ export function serializeModelMetadataDocument(
   const autoCompactTokenLimit = autoCompactPercentToTokenLimit(contextWindow, autoCompactPercent);
   return JSON.stringify({
     models: [{
-      slug,
+      slug: modelSlugFromRowName(slug),
       ...(contextWindowTokens ? { context_window: contextWindowTokens } : {}),
       ...(autoCompactTokenLimit ? { auto_compact_token_limit: autoCompactTokenLimit } : {}),
       ...filteredMetadata(metadata),
@@ -152,20 +184,22 @@ export function replaceModelMetadataForSlug(
   metadata: ModelMetadata,
 ): string {
   const map = parseModelMetadataMap(value);
+  const key = modelMetadataKey(slug);
+  if (!key) return serializeModelMetadataMap(map);
   const imported = filteredMetadata(metadata);
-  const existing = map[slug];
+  const existing = map[key];
   // Codex++ 中已经编辑过的显示名称是用户意图，导入供应商 metadata 时不要覆盖它。
   if (typeof existing?.display_name === "string" && existing.display_name.trim()) {
     imported.display_name = existing.display_name;
   }
-  if (Object.keys(imported).length > 0) map[slug] = imported;
-  else delete map[slug];
+  if (Object.keys(imported).length > 0) map[key] = imported;
+  else delete map[key];
   return serializeModelMetadataMap(map);
 }
 
 export function clearModelMetadataForSlug(value: string, slug: string): string {
   const map = parseModelMetadataMap(value);
-  delete map[slug];
+  delete map[modelMetadataKey(slug)];
   return serializeModelMetadataMap(map);
 }
 
@@ -175,8 +209,8 @@ export function remapModelMetadataSlugs(
 ): string {
   const map = parseModelMetadataMap(value);
   const normalized = Array.from(mappings, ({ previousSlug, nextSlug }) => ({
-    previousSlug: previousSlug.trim(),
-    nextSlug: nextSlug.trim(),
+    previousSlug: modelMetadataKey(previousSlug),
+    nextSlug: modelMetadataKey(nextSlug),
   }));
   const retainedSources = new Set(
     normalized
@@ -186,7 +220,7 @@ export function remapModelMetadataSlugs(
   const moves = normalized.filter(({ previousSlug, nextSlug }) => (
     previousSlug && nextSlug && previousSlug !== nextSlug && map[previousSlug]
   ));
-  if (!moves.length) return value;
+  if (!moves.length) return serializeModelMetadataMap(map);
 
   const movedKeys = new Set(moves.map(({ nextSlug }) => nextSlug));
   for (const { previousSlug } of moves) {
@@ -200,7 +234,7 @@ export function remapModelMetadataSlugs(
 }
 
 export function retainModelMetadataForSlugs(value: string, slugs: Iterable<string>): string {
-  const allowed = new Set(Array.from(slugs, (slug) => slug.trim()).filter(Boolean));
+  const allowed = new Set(Array.from(slugs, modelMetadataKey).filter(Boolean));
   const map = parseModelMetadataMap(value);
   return serializeModelMetadataMap(Object.fromEntries(
     Object.entries(map).filter(([slug]) => allowed.has(slug)),
@@ -224,6 +258,11 @@ function documentCandidates(root: unknown): ModelMetadata[] | null {
   if (isRecord(root) && Array.isArray(root.models)) return root.models.filter(isRecord);
   if (isRecord(root) && typeof root.slug === "string") return [root];
   return null;
+}
+
+function matchesModelSlug(candidate: unknown, targetSlug: string): boolean {
+  return typeof candidate === "string"
+    && modelMetadataKey(candidate) === modelMetadataKey(targetSlug);
 }
 
 // 强制管理字段顺序，避免保存后 context_window 跑到压缩字段之后。
@@ -252,7 +291,7 @@ export function synchronizeModelMetadataDocumentContextWindow(
   }
   const candidates = documentCandidates(root);
   if (!candidates) return null;
-  const matches = candidates.filter((candidate) => candidate.slug === targetSlug);
+  const matches = candidates.filter((candidate) => matchesModelSlug(candidate.slug, targetSlug));
   if (matches.length !== 1) return null;
   const trimmed = contextWindow.trim();
   const tokens = contextWindowToTokens(trimmed);
@@ -291,7 +330,7 @@ export function synchronizeModelMetadataDocumentLimits(
   }
   const candidates = documentCandidates(root);
   if (!candidates) return null;
-  const matches = candidates.filter((candidate) => candidate.slug === targetSlug);
+  const matches = candidates.filter((candidate) => matchesModelSlug(candidate.slug, targetSlug));
   if (matches.length !== 1) return null;
   const compactTokenLimit = autoCompactPercentToTokenLimit(contextWindow, autoCompactPercent);
   if (compactTokenLimit) matches[0].auto_compact_token_limit = compactTokenLimit;
@@ -376,7 +415,7 @@ export function parseModelMetadataDocument(source: string, targetSlug: string): 
   }
   const candidates = documentCandidates(root);
   if (!candidates) return { ok: false, error: "配置中没有找到 models 数组或带 slug 的模型对象。" };
-  const matches = candidates.filter((model) => model.slug === targetSlug);
+  const matches = candidates.filter((model) => matchesModelSlug(model.slug, targetSlug));
   if (matches.length === 0) {
     const available = candidates
       .map((model) => model.slug)
@@ -418,7 +457,7 @@ export function parseModelMetadataDocument(source: string, targetSlug: string): 
   return {
     ok: true,
     value: {
-      slug: targetSlug,
+      slug: modelSlugFromRowName(targetSlug),
       metadata,
       contextWindow,
       autoCompactPercent: displayAutoCompactPercent(autoCompactPercent),

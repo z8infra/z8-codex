@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   accountFailureMessage,
+  accountErrorCode,
   shouldResetCaptchaAfterFailure,
   authSettingsRequireCaptcha,
   canSubmitAuth,
@@ -131,6 +132,12 @@ test("account failures keep the existing account and explain unavailable steps",
     "账户操作未完成，请重试。 错误代码：account_backend_admin_only",
   );
   assert.equal(accountFailureMessage("server detail [credential removed]"), "账户操作未完成，请重试。");
+});
+
+test("account error codes remain discoverable after localized copy is rendered", () => {
+  assert.equal(accountErrorCode("account_invalid_credentials: invalid"), "account_invalid_credentials");
+  assert.equal(accountErrorCode("邮箱或密码错误，请重试。 错误代码：account_invalid_credentials"), "account_invalid_credentials");
+  assert.equal(accountErrorCode("账户操作未完成，请重试。"), "");
 });
 
 test("captcha only resets for challenge failures, not invalid credentials", () => {

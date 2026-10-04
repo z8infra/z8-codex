@@ -4,7 +4,11 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
+use anyhow::Context;
 use codex_plus_core::relay_config::default_codex_home_dir;
+use codex_plus_core::imagegen::{
+    self, ImagegenError, ImagegenState, ImagegenStatus, DEFAULT_IMAGEGEN_BASE_URL,
+};
 use codex_plus_core::settings::{
     BackendSettings, RelayMode, RelayProfile, RelayProtocol, SettingsStore, atomic_write,
 };
@@ -25,6 +29,11 @@ use serde::{Deserialize, Serialize};
 use crate::account_challenges::{PendingLoginRegistry, PendingLoginStatus};
 use crate::commands::CommandResult;
 
+const IMAGEGEN_SKILL_ID: &str = "imagegen-z8";
+const IMAGEGEN_SKILL_VERSION: &str = "1.0.0";
+const IMAGEGEN_SKILL_REPO_KEY: &str = "z8-codex/bundled-imagegen-z8@1.0.0";
+const IMAGEGEN_SKILL_PACKAGE: &[u8] = include_bytes!("../resources/imagegen-z8.zip");
+
 struct Z8State {
     sessions: AccountSessionStore,
     keys: Mutex<Vec<AccountApiKey>>,
@@ -32,6 +41,8 @@ struct Z8State {
 
 static STATE: OnceLock<Z8State> = OnceLock::new();
 static CONFIG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static IMAGEGEN_CONFIG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static IMAGEGEN_SKILL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static ACCOUNT_TRANSITION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static PENDING_LOGIN: OnceLock<Mutex<PendingLoginRegistry>> = OnceLock::new();
 static SECURE_STORE: Z8SecureStore = Z8SecureStore::new();
@@ -45,6 +56,14 @@ fn state() -> &'static Z8State {
 
 fn config_lock() -> &'static Mutex<()> {
     CONFIG_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn imagegen_config_lock() -> &'static Mutex<()> {
+    IMAGEGEN_CONFIG_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn imagegen_skill_lock() -> &'static Mutex<()> {
+    IMAGEGEN_SKILL_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn account_transition_lock() -> &'static Mutex<()> {
@@ -132,6 +151,16 @@ pub struct Z8VerificationPayload {
 pub struct Z8RedeemPayload {
     pub receipt: RedeemReceipt,
     pub account: Z8AccountPayload,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Z8ImagegenModelsPayload {
+    pub key_id: String,
+    pub base_url: String,
+    pub models: Vec<String>,
+    pub default_model: Option<String>,
+    pub observed_at_ms: u64,
 }
 
 #[derive(Clone, Deserialize)]
@@ -345,6 +374,200 @@ fn configured_z8_provider() -> codex_plus_core::z8_provisioning::Z8ProviderConfi
         models: vec![model],
         ..fallback
     }
+}
+
+const IMAGEGEN_MODEL_CACHE_TTL_MS: u64 = 10 * 60 * 1000;
+
+fn imagegen_state() -> ImagegenState {
+    imagegen::load_state()
+}
+
+fn imagegen_status() -> ImagegenStatus {
+    imagegen_status_from_state(&imagegen_state())
+}
+
+fn imagegen_status_from_state(state: &ImagegenState) -> ImagegenStatus {
+    let mut status = imagegen::status_from_state(state);
+    let inspection = inspect_imagegen_skill(&crate::commands::default_skills_manager());
+    status.skill_installed = inspection.source_valid || inspection.linked_valid;
+    status.skill_enabled = inspection.linked_valid;
+    status.skill_ready = inspection.ready;
+    status.skill_managed = inspection.managed;
+    status.skill_version = inspection.version;
+    status
+}
+
+#[derive(Debug, Clone)]
+struct ImagegenSkillInspection {
+    source_valid: bool,
+    linked_valid: bool,
+    ready: bool,
+    managed: bool,
+    version: Option<String>,
+}
+
+fn imagegen_skill_manifest_version(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path.join("SKILL.md")).ok()?;
+    text.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let value = trimmed.strip_prefix("version:")?.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .or_else(|| {
+                value
+                    .strip_prefix('\'')
+                    .and_then(|value| value.strip_suffix('\''))
+            })
+            .unwrap_or(value)
+            .trim();
+        (!value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control))
+            .then(|| value.to_string())
+    })
+}
+
+fn imagegen_skill_dir_is_valid(path: &Path) -> bool {
+    path.is_dir()
+        && path.join("SKILL.md").is_file()
+        && path.join("scripts").is_dir()
+        && path.join("bin").is_dir()
+        && imagegen_skill_manifest_version(path).is_some()
+}
+
+fn inspect_imagegen_skill(
+    manager: &codex_plus_core::skills::SkillsManager,
+) -> ImagegenSkillInspection {
+    let source = manager.source_dir().join(IMAGEGEN_SKILL_ID);
+    let linked = manager.linked_dir().join(IMAGEGEN_SKILL_ID);
+    let source_valid = imagegen_skill_dir_is_valid(&source);
+    let linked_valid = imagegen_skill_dir_is_valid(&linked);
+    let state = manager.load_state();
+    let managed = state
+        .installed
+        .get(IMAGEGEN_SKILL_ID)
+        .is_some_and(|installed| installed.repo_key == IMAGEGEN_SKILL_REPO_KEY);
+    let version = if linked_valid {
+        imagegen_skill_manifest_version(&linked)
+    } else if source_valid {
+        imagegen_skill_manifest_version(&source)
+    } else {
+        None
+    };
+    let ready = linked_valid && (!managed || version.as_deref() == Some(IMAGEGEN_SKILL_VERSION));
+    ImagegenSkillInspection {
+        source_valid,
+        linked_valid,
+        ready,
+        managed,
+        version,
+    }
+}
+
+fn bundled_imagegen_skill() -> codex_plus_core::skills::RemoteSkill {
+    codex_plus_core::skills::RemoteSkill {
+        id: IMAGEGEN_SKILL_ID.to_string(),
+        name: "imagegen-Z8".to_string(),
+        description: "通过 OpenAI 兼容 API 生成或编辑图片".to_string(),
+        repo_key: IMAGEGEN_SKILL_REPO_KEY.to_string(),
+        repo_path: IMAGEGEN_SKILL_ID.to_string(),
+        content_hash: IMAGEGEN_SKILL_VERSION.to_string(),
+    }
+}
+
+pub(crate) fn ensure_imagegen_skill(force_reinstall: bool) -> anyhow::Result<()> {
+    let _guard = imagegen_skill_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let manager = crate::commands::default_skills_manager();
+    let inspection = inspect_imagegen_skill(&manager);
+    if !force_reinstall && inspection.ready {
+        return Ok(());
+    }
+    // A valid source directory only needs its normal Codex link restored. This
+    // keeps manually installed skills intact and avoids unpacking the bundled
+    // release on every account-panel open.
+    if !force_reinstall
+        && inspection.source_valid
+        && !inspection.linked_valid
+        && imagegen_skill_manifest_version(&manager.source_dir().join(IMAGEGEN_SKILL_ID)).as_deref()
+            == Some(IMAGEGEN_SKILL_VERSION)
+    {
+        manager.set_enabled(IMAGEGEN_SKILL_ID, true)?;
+        return Ok(());
+    }
+    // A user may have installed imagegen-Z8 manually into the normal Codex
+    // skill directory. It is already usable even when the manager has no SSOT
+    // record, so do not overwrite it implicitly.
+    if !force_reinstall && inspection.linked_valid && !inspection.source_valid {
+        return Ok(());
+    }
+    manager.install_from_zip(&bundled_imagegen_skill(), IMAGEGEN_SKILL_PACKAGE)?;
+    Ok(())
+}
+
+fn imagegen_error_message(error: ImagegenError) -> String {
+    match error {
+        ImagegenError::Http(401 | 403) => "生图 API Key 无效或没有生图权限，请重新选择生图 Key".to_string(),
+        ImagegenError::Http(429) => "生图模型列表请求过于频繁，请稍后重试".to_string(),
+        ImagegenError::Business(message) if !message.trim().is_empty() => message,
+        other => other.to_string(),
+    }
+}
+
+async fn fetch_selected_image_key(key_id: &str) -> Result<(AccountSession, AccountApiKey), String> {
+    let Some(session) = state().sessions.snapshot() else {
+        return Err("请先登录 Z8 账户".to_string());
+    };
+    if key_id.trim().is_empty() {
+        return Err("请选择生图 API Key".to_string());
+    }
+    let client = AccountClient::default().map_err(|error| error.to_string())?;
+    let keys = fetch_keys(&client, &session, &CancellationToken::new())
+        .await
+        .map_err(|error| error.to_string())?;
+    if state()
+        .sessions
+        .snapshot()
+        .as_ref()
+        .is_none_or(|current| !same_session(current, &session))
+    {
+        return Err("Z8 账户已切换，请重新选择生图 API Key".to_string());
+    }
+    let key = keys
+        .into_iter()
+        .find(|key| key.id == key_id)
+        .ok_or_else(|| "找不到所选生图 API Key，请刷新 Key 后重试".to_string())?;
+    if !ApiKeyStatus::from(key.status.as_str()).is_usable() {
+        return Err("所选生图 API Key 当前不可用".to_string());
+    }
+    Ok((session, key))
+}
+
+fn imagegen_cache_is_fresh(state: &ImagegenState, key_id: &str) -> bool {
+    state.key_id.as_deref() == Some(key_id)
+        && state.base_url.as_deref() == Some(DEFAULT_IMAGEGEN_BASE_URL)
+        && !state.models.is_empty()
+        && state.models_observed_at_ms.is_some_and(|observed| {
+            imagegen::current_timestamp_ms().saturating_sub(observed) < IMAGEGEN_MODEL_CACHE_TTL_MS
+        })
+}
+
+fn clear_managed_imagegen() -> anyhow::Result<()> {
+    let _guard = imagegen_config_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state = imagegen_state();
+    if state.managed {
+        let path = imagegen::default_config_path()?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("清理生图配置失败：{}", path.display()));
+            }
+        }
+    }
+    imagegen::clear_state()
 }
 
 /// The supplier profile is the persisted source of truth for the selected
@@ -812,6 +1035,9 @@ pub async fn z8_logout() -> CommandResult<Z8AccountPayload> {
         let _guard = account_transition_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Err(error) = clear_managed_imagegen() {
+            return command_error(format!("退出登录失败，无法清理 imagegen-Z8 配置：{error}"));
+        }
         let clear_result = secure_store().clear();
         // A previous transition may have cleared the session already while
         // leaving an in-memory key snapshot behind. Always clear that cache
@@ -842,6 +1068,9 @@ pub async fn z8_logout() -> CommandResult<Z8AccountPayload> {
     };
     if !same_session(&still_current, &current) {
         return command_error("账户已切换，请重试");
+    }
+    if let Err(error) = clear_managed_imagegen() {
+        return command_error(format!("退出登录未完成，无法清理 imagegen-Z8 配置：{error}"));
     }
     // Establish the secure-store logout tombstone and clear the native
     // snapshot before publishing the in-memory logout. The store writes the
@@ -1206,6 +1435,157 @@ pub fn z8_reset_supplier_profile() -> CommandResult<Z8AccountPayload> {
 }
 
 #[tauri::command]
+pub fn z8_imagegen_status() -> CommandResult<ImagegenStatus> {
+    successful("imagegen-Z8 配置状态已读取", imagegen_status())
+}
+
+#[tauri::command]
+pub fn z8_imagegen_skill_ensure() -> CommandResult<ImagegenStatus> {
+    match ensure_imagegen_skill(false) {
+        Ok(()) => successful("imagegen-Z8 skill 已就绪", imagegen_status()),
+        Err(error) => command_error(format!("自动安装 imagegen-Z8 skill 失败：{error}")),
+    }
+}
+
+#[tauri::command]
+pub fn z8_imagegen_skill_repair() -> CommandResult<ImagegenStatus> {
+    match ensure_imagegen_skill(true) {
+        Ok(()) => successful("imagegen-Z8 skill 已重新安装", imagegen_status()),
+        Err(error) => command_error(format!("重新安装 imagegen-Z8 skill 失败：{error}")),
+    }
+}
+
+#[tauri::command]
+pub async fn z8_imagegen_models(key_id: String) -> CommandResult<Z8ImagegenModelsPayload> {
+    let (session, key) = match fetch_selected_image_key(&key_id).await {
+        Ok(value) => value,
+        Err(message) => return command_error(message),
+    };
+    let api_key = key.secret().to_string();
+    let models = match imagegen::fetch_models(DEFAULT_IMAGEGEN_BASE_URL, &api_key).await {
+        Ok(models) => models,
+        Err(error) => return command_error(imagegen_error_message(error)),
+    };
+    if !imagegen::has_image_models(&models) {
+        return command_error(imagegen::NO_IMAGE_MODELS_MESSAGE);
+    }
+    let _account_guard = account_transition_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state()
+        .sessions
+        .snapshot()
+        .as_ref()
+        .is_none_or(|current| !same_session(current, &session))
+    {
+        return command_error("Z8 账户已切换，请重新选择生图 API Key");
+    }
+    let _guard = imagegen_config_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let observed_at_ms = imagegen::current_timestamp_ms();
+    let default_model = imagegen::choose_default_model(&models);
+    let mut state = imagegen_state();
+    let key_changed = state.key_id.as_deref() != Some(key_id.as_str());
+    state.schema_version = 1;
+    state.key_id = Some(key_id.clone());
+    state.base_url = Some(DEFAULT_IMAGEGEN_BASE_URL.to_string());
+    state.models = models.clone();
+    state.model = default_model.clone();
+    if key_changed {
+        // Model refresh is only a catalog probe. Until apply writes the new
+        // secret, the previous .env must not be reported as configured for a
+        // different key.
+        state.managed = false;
+    }
+    state.models_observed_at_ms = Some(observed_at_ms);
+    if let Err(error) = imagegen::save_state(&state) {
+        return command_error(format!("保存生图模型列表失败：{error}"));
+    }
+    successful(
+        "生图模型列表已刷新",
+        Z8ImagegenModelsPayload {
+            key_id,
+            base_url: DEFAULT_IMAGEGEN_BASE_URL.to_string(),
+            models,
+            default_model,
+            observed_at_ms,
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn z8_imagegen_apply(key_id: String) -> CommandResult<ImagegenStatus> {
+    if let Err(error) = ensure_imagegen_skill(false) {
+        return command_error(format!("imagegen-Z8 skill 尚未就绪：{error}"));
+    }
+    let (session, key) = match fetch_selected_image_key(&key_id).await {
+        Ok(value) => value,
+        Err(message) => return command_error(message),
+    };
+    let api_key = key.secret().to_string();
+    let mut image_state = imagegen_state();
+    let models = if imagegen_cache_is_fresh(&image_state, &key_id) {
+        image_state.models.clone()
+    } else {
+        match imagegen::fetch_models(DEFAULT_IMAGEGEN_BASE_URL, &api_key).await {
+            Ok(models) => {
+                if !imagegen::has_image_models(&models) {
+                    return command_error(imagegen::NO_IMAGE_MODELS_MESSAGE);
+                }
+                image_state.models = models.clone();
+                image_state.models_observed_at_ms = Some(imagegen::current_timestamp_ms());
+                models
+            }
+            Err(error) => return command_error(imagegen_error_message(error)),
+        }
+    };
+    if !imagegen::has_image_models(&models) {
+        return command_error(imagegen::NO_IMAGE_MODELS_MESSAGE);
+    }
+    let Some(model) = imagegen::choose_default_model(&models) else {
+        return command_error(imagegen::NO_IMAGE_MODELS_MESSAGE);
+    };
+    let _account_guard = account_transition_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if state()
+        .sessions
+        .snapshot()
+        .as_ref()
+        .is_none_or(|current| !same_session(current, &session))
+    {
+        return command_error("Z8 账户已切换，请重新选择生图 API Key");
+    }
+    let _guard = imagegen_config_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Err(error) = imagegen::write_config(DEFAULT_IMAGEGEN_BASE_URL, &api_key, &model) {
+        return command_error(format!("写入 imagegen-Z8 配置失败：{error}"));
+    }
+    image_state.schema_version = 1;
+    image_state.managed = true;
+    image_state.key_id = Some(key_id);
+    image_state.base_url = Some(DEFAULT_IMAGEGEN_BASE_URL.to_string());
+    image_state.model = Some(model);
+    if let Err(error) = imagegen::save_state(&image_state) {
+        return command_error(format!("保存 imagegen-Z8 状态失败：{error}"));
+    }
+    successful(
+        "imagegen-Z8 已配置，可调用生图",
+        imagegen_status_from_state(&image_state),
+    )
+}
+
+#[tauri::command]
+pub fn z8_imagegen_reset() -> CommandResult<ImagegenStatus> {
+    match clear_managed_imagegen() {
+        Ok(()) => successful("imagegen-Z8 配置已清除", imagegen_status()),
+        Err(error) => command_error(format!("清除 imagegen-Z8 配置失败：{error}")),
+    }
+}
+
+#[tauri::command]
 pub async fn z8_usage(key_id: String) -> CommandResult<codex_plus_core::z8_usage::UsageSnapshot> {
     let Some(session) = state().sessions.snapshot() else {
         return command_error("请先登录 Z8 账户");
@@ -1362,6 +1742,39 @@ mod tests {
         let serialized = detail.to_string();
         assert!(!serialized.contains("user@example.com"));
         assert!(!serialized.contains("token-secret"));
+    }
+
+    #[test]
+    fn imagegen_model_cache_is_bound_to_its_independent_key() {
+        let mut state = ImagegenState::fresh();
+        state.managed = true;
+        state.key_id = Some("image-key-17".to_string());
+        state.base_url = Some(DEFAULT_IMAGEGEN_BASE_URL.to_string());
+        state.models = vec!["image-2".to_string()];
+        state.models_observed_at_ms = Some(imagegen::current_timestamp_ms());
+
+        assert!(imagegen_cache_is_fresh(&state, "image-key-17"));
+        assert!(!imagegen_cache_is_fresh(&state, "programming-key-4"));
+    }
+
+    #[test]
+    fn bundled_imagegen_skill_archive_contains_a_complete_skill_root() {
+        let temp = tempfile::tempdir().expect("temporary skill directory");
+        codex_plus_core::skills::extract_skill_subtree(
+            IMAGEGEN_SKILL_PACKAGE,
+            IMAGEGEN_SKILL_ID,
+            temp.path(),
+        )
+        .expect("bundled skill archive extracts");
+        let root = temp.path();
+        assert!(root.join("SKILL.md").is_file());
+        assert!(root.join("scripts/imagegen-Z8.ps1").is_file());
+        assert!(root.join("scripts/imagegen-Z8.sh").is_file());
+        assert!(root.join("bin/imagegen-Z8-windows-amd64.exe").is_file());
+        assert_eq!(
+            imagegen_skill_manifest_version(root).as_deref(),
+            Some(IMAGEGEN_SKILL_VERSION)
+        );
     }
 
     fn test_api_key(id: i64, secret: &str) -> AccountApiKey {

@@ -16,7 +16,7 @@ for (const path of [
   join(managerDir, "..", "..", "assets", "inject", "upstream", "dream-skin", "windows", "dream-reference.jpg"),
   join(managerDir, "..", "..", "assets", "inject", "upstream", "dream-skin", "macos", "portal-hero.png"),
 ]) {
-  assert(existsSync(path), `upstream source asset must be preserved: ${path}`);
+  assert(!existsSync(path), `retired preview source asset still exists: ${path}`);
 }
 
-console.log("Z8 production assets: logo present; hidden Dream Skin previews absent; upstream source assets preserved");
+console.log("Z8 production assets: logo present; retired previews absent from build and source");

@@ -116,7 +116,7 @@ pub fn collect_catalog_entries(
     model_auto_compact: &HashMap<String, String>,
     current_model: &str,
 ) -> Vec<ModelCatalogEntry> {
-    // 先解析 model_list，保留顺序并去重；后缀已从 model_list 剥离，窗口来自 model_windows map。
+    // 兼容尚未迁移的后缀语法；显式后缀优先于独立窗口配置。
     let mut seen = HashSet::new();
     let mut list_entries: Vec<ModelCatalogEntry> = Vec::new();
     for raw in model_list
@@ -124,16 +124,18 @@ pub fn collect_catalog_entries(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let (slug, _) = parse_model_suffix(raw);
+        let (slug, suffix_window) = parse_model_suffix(raw);
         if slug.is_empty() {
             continue;
         }
         if !seen.insert(slug.clone()) {
             continue;
         }
-        let suffix_window = model_windows
-            .get(&slug)
-            .and_then(|token| parse_window_token(token));
+        let suffix_window = suffix_window.or_else(|| {
+            model_windows
+                .get(&slug)
+                .and_then(|token| parse_window_token(token))
+        });
         let auto_compact_percent = model_auto_compact
             .get(&slug)
             .and_then(|token| parse_compact_percent(token));
@@ -149,11 +151,20 @@ pub fn collect_catalog_entries(
     let current_model = current_model.trim();
     let mut entries = Vec::new();
     if !current_model.is_empty() {
-        let (slug, _) = parse_model_suffix(current_model);
+        let (slug, suffix_window) = parse_model_suffix(current_model);
         if !slug.is_empty() {
-            let suffix_window = model_windows
-                .get(&slug)
-                .and_then(|token| parse_window_token(token));
+            let suffix_window = suffix_window
+                .or_else(|| {
+                    list_entries
+                        .iter()
+                        .find(|entry| entry.slug == slug)
+                        .and_then(|entry| entry.suffix_window)
+                })
+                .or_else(|| {
+                    model_windows
+                        .get(&slug)
+                        .and_then(|token| parse_window_token(token))
+                });
             let auto_compact_percent = model_auto_compact
                 .get(&slug)
                 .and_then(|token| parse_compact_percent(token));
@@ -192,6 +203,16 @@ const DEEPSEEK_METADATA_JSON: &str = include_str!(concat!(
 const ASTRA_METADATA_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../assets/astra-model-metadata-compat.json"
+));
+
+const GPT6_SOL_LUNA_METADATA_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/gpt6-sol-luna-model-metadata-compat.json"
+));
+
+const GPT61_SOL_METADATA_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/gpt61-sol-model-metadata-compat.json"
 ));
 
 pub fn requires_bundled_metadata_catalog(slug: &str) -> bool {
@@ -361,23 +382,77 @@ fn deepseek_model_template_entry(slug: &str) -> Option<(Value, bool)> {
 }
 
 fn model_template_entry(slug: &str) -> (Value, bool) {
-    if let Some(entry) = bundled_template_entry(slug) {
-        return (entry, true);
+    let (template, has_model_metadata) = runtime_or_bundled_template_entry(slug);
+    if let Some(template) = template {
+        return (template, has_model_metadata);
     }
+    (
+        first_bundled_template_entry().unwrap_or_else(|| json!({})),
+        false,
+    )
+}
+
+/// Resolve model fields from the official runtime cache before the bundled fallback.
+/// The cache is read-only and may be missing or malformed on API-only installations.
+fn runtime_or_bundled_template_entry(slug: &str) -> (Option<Value>, bool) {
     if let Some(compatibility) = compatibility_metadata_entry(slug) {
-        let mut template = first_bundled_template_entry().unwrap_or_else(|| json!({}));
+        let base = runtime_models_cache_entry(slug)
+            .or_else(|| bundled_template_entry(slug))
+            .unwrap_or_else(|| first_bundled_template_entry().unwrap_or_else(|| json!({})));
+        let mut template = base;
         if let (Some(target), Some(source)) = (template.as_object_mut(), compatibility.as_object())
         {
             for (key, value) in source {
                 target.insert(key.clone(), value.clone());
             }
         }
-        return (template, true);
+        retarget_model_identity(&mut template, slug);
+        return (Some(template), true);
     }
-    (
-        first_bundled_template_entry().unwrap_or_else(|| json!({})),
-        false,
-    )
+    if let Some(mut entry) = runtime_models_cache_entry(slug) {
+        retarget_model_identity(&mut entry, slug);
+        return (Some(entry), true);
+    }
+    if let Some(mut entry) = bundled_template_entry(slug) {
+        retarget_model_identity(&mut entry, slug);
+        return (Some(entry), true);
+    }
+    (None, false)
+}
+
+fn runtime_models_cache_entry(slug: &str) -> Option<Value> {
+    let cache_path = crate::codex_home::default_codex_home_dir().join("models_cache.json");
+    let contents = std::fs::read_to_string(cache_path).ok()?;
+    let catalog: Value = serde_json::from_str(&contents).ok()?;
+    find_catalog_entry(catalog.get("models")?.as_array()?, slug).cloned()
+}
+
+/// The bundled catalog can be older than a newly introduced model. Keep the
+/// generated prompt identity aligned with the selected GPT-6 family instead of
+/// inheriting the GPT-5.5 fallback template's first line.
+fn retarget_model_identity(template: &mut Value, slug: &str) {
+    let identity = if slug.trim().to_ascii_lowercase().starts_with("gpt-6.1") {
+        "GPT-6.1"
+    } else if slug.trim().to_ascii_lowercase().starts_with("gpt-6") {
+        "GPT-6"
+    } else {
+        return;
+    };
+    let replacement = format!("based on {identity}");
+    for key in ["base_instructions"] {
+        if let Some(value) = template.get(key).and_then(Value::as_str).map(str::to_owned) {
+            template[key] = json!(value.replace("based on GPT-5", &replacement));
+        }
+    }
+    let message_template = template
+        .get("model_messages")
+        .and_then(|messages| messages.get("instructions_template"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some(value) = message_template {
+        template["model_messages"]["instructions_template"] =
+            json!(value.replace("based on GPT-5", &replacement));
+    }
 }
 
 /// 先精确匹配模型 ID；只在未命中时容忍 ASCII 大小写差异。
@@ -409,6 +484,8 @@ fn first_bundled_template_entry() -> Option<Value> {
 fn compatibility_metadata_entry(slug: &str) -> Option<Value> {
     catalog_metadata_entry(GPT56_METADATA_JSON, slug)
         .or_else(|| catalog_metadata_entry(ASTRA_METADATA_JSON, slug))
+        .or_else(|| catalog_metadata_entry(GPT6_SOL_LUNA_METADATA_JSON, slug))
+        .or_else(|| catalog_metadata_entry(GPT61_SOL_METADATA_JSON, slug))
 }
 
 fn catalog_metadata_entry(catalog_json: &str, slug: &str) -> Option<Value> {

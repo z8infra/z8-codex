@@ -202,7 +202,15 @@ fn app_paths_resolves_portable_current_link_to_directory_version() {
     std::fs::create_dir_all(&target).unwrap();
     std::fs::write(target.join("Codex.exe"), "").unwrap();
     std::fs::write(target.join("version"), "42.1.0\n").unwrap();
-    std::os::windows::fs::symlink_dir(&target, &current).unwrap();
+    if let Err(error) = std::os::windows::fs::symlink_dir(&target, &current) {
+        // ERROR_PRIVILEGE_NOT_HELD (1314) is expected on Windows hosts where
+        // Developer Mode or SeCreateSymbolicLinkPrivilege is not enabled.
+        if error.raw_os_error() == Some(1314) {
+            eprintln!("skipping directory symlink resolution test: Windows symbolic-link privilege is unavailable");
+            return;
+        }
+        panic!("failed to create directory symlink: {error}");
+    }
 
     assert_eq!(
         codex_app_version(&current).as_deref(),
@@ -746,6 +754,47 @@ fn launcher_constructs_windows_packaged_activation_without_real_app() {
                 .to_string(),
             process_id: None,
         }
+    );
+}
+
+#[test]
+fn packaged_app_user_model_id_reads_application_id_from_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let package_dir = temp
+        .path()
+        .join("OpenAI.ChatGPT-Desktop_1.2026.190.0_x64__2p2nqsd0c76g0");
+    let app_dir = package_dir.join("app");
+    std::fs::create_dir_all(&app_dir).unwrap();
+    std::fs::write(
+        package_dir.join("AppxManifest.xml"),
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
+            "<Package xmlns=\"http://schemas.microsoft.com/appx/manifest/foundation/windows10\">",
+            "<Applications><Application Id=\"ChatGPTDesktop\" ",
+            "Executable=\"app\\ChatGPT.exe\" EntryPoint=\"Windows.FullTrustApplication\"/>",
+            "</Applications></Package>"
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        packaged_app_user_model_id(&app_dir).as_deref(),
+        Some("OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0!ChatGPTDesktop")
+    );
+}
+
+#[test]
+fn packaged_app_user_model_id_falls_back_without_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let app_dir = temp
+        .path()
+        .join("OpenAI.Codex_26.506.2212.0_x64__2p2nqsd0c76g0")
+        .join("app");
+    std::fs::create_dir_all(&app_dir).unwrap();
+
+    assert_eq!(
+        packaged_app_user_model_id(&app_dir).as_deref(),
+        Some("OpenAI.Codex_2p2nqsd0c76g0!App")
     );
 }
 
@@ -1393,7 +1442,11 @@ async fn a_windows_reserved_protocol_proxy_port_fails_fast_with_actionable_advic
         !message.contains("被 Windows 保留") || cfg!(windows),
         "Windows-only guidance must not leak onto other platforms: {message}"
     );
-    // 保留端口重试毫无意义：只允许尝试一次 bind，不能烧完 6 秒重试预算。
+    // 固定代理端口的 10013 可能只是旧 helper 尚未释放；永久失败时应烧完
+    // 有限等待窗口，而不是第一次 bind 就误报保留端口。
+    let expected_attempts = (codex_plus_core::launcher::protocol_proxy_bind_retry_timeout_ms()
+        / codex_plus_core::launcher::helper_bind_retry_interval_ms())
+        + 1;
     assert_eq!(
         events
             .lock()
@@ -1401,7 +1454,7 @@ async fn a_windows_reserved_protocol_proxy_port_fails_fast_with_actionable_advic
             .iter()
             .filter(|event| *event == "start-helper-forbidden:57321")
             .count(),
-        1
+        usize::try_from(expected_attempts).unwrap()
     );
     // 端口没起来就不该继续把 Codex 拉起来，否则它会连到没人监听的地址。
     assert!(
@@ -2097,11 +2150,12 @@ async fn default_launch_hooks_provider_sync_enabled_returns_explicit_error() {
 }
 
 #[test]
-fn paused_dream_skin_does_not_reapply_the_native_base_theme_on_launch() {
+fn retired_dream_skin_settings_do_not_reapply_native_theme_on_launch() {
     let source =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/launcher.rs")).unwrap();
 
-    assert!(source.contains("!settings.codex_app_dream_skin_paused"));
+    assert!(!source.contains("sync_default_dream_skin_base_theme"));
+    assert!(!source.contains("dream_skin_image_response"));
 }
 
 #[tokio::test]

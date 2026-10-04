@@ -564,7 +564,8 @@ impl SQLiteStorageAdapter {
             "assigned_thread_id = ?1",
             &[&thread_id],
         )?;
-        let file_backups = rollout_file_backups(tables.get("threads").and_then(Value::as_array));
+        let (file_backups, unreadable_rollouts) =
+            rollout_file_backups(tables.get("threads").and_then(Value::as_array));
         if !file_backups.is_empty() {
             tables.insert("__files".to_string(), Value::Array(file_backups.clone()));
         }
@@ -604,7 +605,8 @@ impl SQLiteStorageAdapter {
                 Some(&backup_path),
             ));
         }
-        let mut file_errors = Vec::new();
+        // Preserve DB undo after a rollout path or non-NotFound read failure; never report success.
+        let mut file_errors = unreadable_rollouts;
         for file in file_backups {
             if let Some(path) = file.get("path").and_then(Value::as_str) {
                 if let Err(err) = fs::remove_file(path) {
@@ -1204,7 +1206,8 @@ fn allowed_backup_file_paths(tables: &Map<String, Value>) -> HashSet<String> {
         .flatten()
         .filter_map(|row| row.get("rollout_path").and_then(Value::as_str))
         .filter(|path| !path.trim().is_empty())
-        .map(ToString::to_string)
+        // Only the same platform-native path used while backing up may be restored.
+        .filter_map(|path| resolve_rollout_path(path, cfg!(windows)).ok())
         .collect()
 }
 
@@ -1302,19 +1305,91 @@ fn delete_related_rows(
     Ok(())
 }
 
-fn rollout_file_backups(thread_rows: Option<&Vec<Value>>) -> Vec<Value> {
-    thread_rows
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.get("rollout_path").and_then(Value::as_str))
-        .filter_map(|path| {
-            let bytes = fs::read(path).ok()?;
-            Some(json!({
-                "path": path,
-                "content_b64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
-            }))
-        })
-        .collect()
+/// Back up only the platform-native view of each rollout. A WSL path is not a
+/// second local path on Windows, and a Windows drive path is relative on Unix.
+/// Only NotFound means a previously removed file; all other failures are reported.
+fn rollout_file_backups(thread_rows: Option<&Vec<Value>>) -> (Vec<Value>, Vec<String>) {
+    let mut entries = Vec::new();
+    let mut unreadable = Vec::new();
+    for row in thread_rows.into_iter().flatten() {
+        let Some(source_path) = row.get("rollout_path").and_then(Value::as_str) else {
+            continue;
+        };
+        if source_path.trim().is_empty() {
+            continue;
+        }
+        let path = match resolve_rollout_path(source_path, cfg!(windows)) {
+            Ok(path) => path,
+            Err(error) => {
+                unreadable.push(format!("{source_path}: 路径无法安全解析，未删除：{error}"));
+                continue;
+            }
+        };
+        match fs::read(&path) {
+            Ok(bytes) => entries.push(rollout_file_backup_entry(&path, source_path, bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                unreadable.push(format!("{source_path}: 读取失败，未删除：{error}"));
+            }
+        }
+    }
+    (entries, unreadable)
+}
+
+/// `path` is the sole platform-native view; `source_path` retains the DB spelling.
+fn rollout_file_backup_entry(path: &str, source_path: &str, bytes: Vec<u8>) -> Value {
+    let mut entry = json!({
+        "path": path,
+        "content_b64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
+    });
+    if path != source_path {
+        entry["source_path"] = Value::String(source_path.to_string());
+    }
+    entry
+}
+
+/// Resolve without probing alternate files or depending on the process cwd.
+/// The explicit platform argument keeps cross-platform rejection tests deterministic.
+fn resolve_rollout_path(path: &str, windows: bool) -> anyhow::Result<String> {
+    if !windows {
+        anyhow::ensure!(
+            path.starts_with('/') && !path.starts_with("//"),
+            "rollout path is not an unambiguous native absolute path"
+        );
+        return Ok(path.to_string());
+    }
+    if let Some(rest) = path.strip_prefix("/mnt/") {
+        let bytes = rest.as_bytes();
+        anyhow::ensure!(
+            bytes.len() > 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b'/',
+            "unsupported WSL mount path"
+        );
+        let tail = &rest[2..];
+        anyhow::ensure!(
+            !tail.contains('\\') && !tail.split('/').any(|part| matches!(part, "." | "..")),
+            "ambiguous WSL mount path"
+        );
+        let drive = bytes[0].to_ascii_uppercase() as char;
+        return Ok(format!("{drive}:/{tail}"));
+    }
+    let normalized = path.replace('\\', "/");
+    let native = normalized.strip_prefix("//?/").unwrap_or(&normalized);
+    let bytes = native.as_bytes();
+    let absolute_drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && bytes[2] == b'/';
+    let unc = native.strip_prefix("UNC/").filter(|_| normalized.starts_with("//?/"))
+        .or_else(|| native.strip_prefix("//"));
+    let absolute_unc = unc.is_some_and(|rest| {
+        let mut parts = rest.split('/');
+        let server = parts.next().unwrap_or_default();
+        let share = parts.next().unwrap_or_default();
+        !matches!(server, "" | "." | ".." | "?")
+            && !matches!(share, "" | "." | "..")
+    });
+    anyhow::ensure!(absolute_drive || absolute_unc, "rollout path is not a native absolute path");
+    Ok(path.to_string())
 }
 
 fn sql_value_to_json(value: ValueRef<'_>) -> Value {
@@ -1345,5 +1420,36 @@ pub(crate) fn json_to_sql_value(value: &Value) -> SqlValue {
         }
         Value::String(value) => SqlValue::Text(value.clone()),
         other => SqlValue::Text(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod wsl_path_tests {
+    use super::resolve_rollout_path;
+
+    #[test]
+    fn windows_maps_wsl_mounts_to_one_absolute_drive_path() {
+        assert_eq!(resolve_rollout_path("/mnt/c/Users/tom/a.jsonl", true).unwrap(), "C:/Users/tom/a.jsonl");
+        assert_eq!(resolve_rollout_path("/mnt/f/TEMP/a.jsonl", true).unwrap(), "F:/TEMP/a.jsonl");
+        for path in ["C:/Users/tom/a.jsonl", r"C:\Users\tom\a.jsonl", r"\\server\share\a.jsonl", r"\\?\C:\Users\tom\a.jsonl", r"\\?\UNC\server\share\a.jsonl"] {
+            assert_eq!(resolve_rollout_path(path, true).unwrap(), path);
+        }
+    }
+
+    #[test]
+    fn windows_rejects_ambiguous_relative_or_cross_mount_paths() {
+        for path in ["/home/tom/a.jsonl", "/mnt/external/a.jsonl", "/mnt/c/", "/mnt/c/../d/a.jsonl", "/mnt/c/Users/./a.jsonl", r"/mnt/c/Users\a.jsonl", "C:a.jsonl", "a.jsonl", r"\Users\tom\a.jsonl", r"\\.\pipe\a"] {
+            assert!(resolve_rollout_path(path, true).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn unix_keeps_native_paths_and_never_probes_windows_relative_names() {
+        for path in ["/home/tom/a.jsonl", "/mnt/c/Users/tom/a.jsonl", r"/tmp/a\b.jsonl"] {
+            assert_eq!(resolve_rollout_path(path, false).unwrap(), path);
+        }
+        for path in ["C:/Users/tom/a.jsonl", r"C:\Users\tom\a.jsonl", "a.jsonl", r"\\server\share\a.jsonl", "//server/share/a.jsonl"] {
+            assert!(resolve_rollout_path(path, false).is_err(), "{path}");
+        }
     }
 }

@@ -2,24 +2,22 @@
 
 use anyhow::{Context, Result};
 use codex_plus_core::launcher::{
-    BridgeReinjector, DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
+    launch_and_inject_with_hooks, BridgeReinjector, DefaultLaunchHooks, LaunchHooks, LaunchOptions,
 };
 use codex_plus_core::models::{DeleteResult, ExportResult, SessionRef};
 use codex_plus_core::relay_config::relay_profile_api_key;
 use codex_plus_core::routes::{BridgeContext, BridgeDataService, BridgeRuntimeService};
 use codex_plus_core::settings::{
-    BackendSettings, RelayMode, RelayProfile, SettingsStore, atomic_write,
+    atomic_write, BackendSettings, RelayMode, RelayProfile, SettingsStore,
 };
 use codex_plus_core::status::LaunchStatus;
-use codex_plus_core::user_scripts::UserScriptManager;
 use codex_plus_core::z8_provisioning::{
-    ProviderConfigSnapshot, ProviderConfigTransaction, ProviderConfigUpdate, SecretApiKey,
-    Z8_BASE_URL, Z8_DEFAULT_MODEL, Z8_DEFAULT_MODEL_LIST, Z8_DEFAULT_PROFILE_CONFIG,
-    Z8ProviderConfig,
-    set_z8_api_key_in_auth_contents, z8_provider_documents_are_applied,
+    set_z8_api_key_in_auth_contents, z8_provider_documents_are_applied, ProviderConfigSnapshot,
+    ProviderConfigTransaction, ProviderConfigUpdate, SecretApiKey, Z8ProviderConfig, Z8_BASE_URL,
+    Z8_DEFAULT_MODEL, Z8_DEFAULT_MODEL_LIST, Z8_DEFAULT_PROFILE_CONFIG,
 };
 use codex_plus_core::z8_secure_store::{PersistedAccount, SecureStoreError, Z8SecureStore};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -37,10 +35,7 @@ impl Default for LauncherHooks {
         Self {
             core: Arc::new(DefaultLaunchHooks::default()),
             data: Arc::new(LauncherDataService::default()),
-            runtime: Arc::new(LauncherRuntimeService::new(
-                9229,
-                default_user_script_manager(),
-            )),
+            runtime: Arc::new(LauncherRuntimeService::new(9229)),
             bridge_context: Arc::new(Mutex::new(None)),
             browser_monitor: Arc::new(Mutex::new(None)),
         }
@@ -122,7 +117,11 @@ fn top_level_failure_status(message: String, options: &LaunchOptions) -> LaunchS
     }
 }
 
-async fn launcher_main(_args: Vec<String>, helper_only: bool, options: LaunchOptions) -> Result<()> {
+async fn launcher_main(
+    _args: Vec<String>,
+    helper_only: bool,
+    options: LaunchOptions,
+) -> Result<()> {
     // The desktop executable is the Codex++ entry point.  Validate this
     // boundary before any helper or app process is started so an independent
     // Z8 Launch/download layer cannot become an implicit runtime prerequisite.
@@ -220,7 +219,11 @@ fn ensure_z8_provider_for_launch(account: Option<&PersistedAccount>) -> bool {
 
 fn is_z8_supplier_profile(profile: &RelayProfile) -> bool {
     let expected = Z8_BASE_URL.trim_end_matches('/').to_ascii_lowercase();
-    let base = profile.base_url.trim().trim_end_matches('/').to_ascii_lowercase();
+    let base = profile
+        .base_url
+        .trim()
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
     let upstream = profile
         .upstream_base_url
         .trim()
@@ -270,8 +273,9 @@ fn prepare_z8_supplier_profile(
         codex_plus_core::relay_config::normalize_relay_profile_for_storage(profile)?;
     } else {
         profile.api_key = key.secret().to_string();
-        profile.auth_contents = set_z8_api_key_in_auth_contents(&profile.auth_contents, key.secret())
-            .or_else(|_| set_z8_api_key_in_auth_contents("", key.secret()))?;
+        profile.auth_contents =
+            set_z8_api_key_in_auth_contents(&profile.auth_contents, key.secret())
+                .or_else(|_| set_z8_api_key_in_auth_contents("", key.secret()))?;
     }
     settings.relay_profiles_enabled = true;
     settings.active_relay_id = profile.id.clone();
@@ -291,9 +295,7 @@ fn new_z8_supplier_profile(settings: &BackendSettings) -> RelayProfile {
     profile
 }
 
-fn sync_z8_supplier_profile_for_launch(
-    account: &PersistedAccount,
-) -> anyhow::Result<()> {
+fn sync_z8_supplier_profile_for_launch(account: &PersistedAccount) -> anyhow::Result<()> {
     let store = SettingsStore::default();
     let previous = store.load()?;
     let mut next = previous.clone();
@@ -718,15 +720,27 @@ impl LaunchHooks for LauncherHooks {
         self.core.load_settings().await
     }
 
-    async fn start_native_browser_compatibility(&self, settings: &codex_plus_core::settings::BackendSettings) {
+    async fn start_native_browser_compatibility(
+        &self,
+        settings: &codex_plus_core::settings::BackendSettings,
+    ) {
         let monitor = codex_plus_core::native_browser::start_monitor(
-            settings.enhancements_enabled && settings.codex_app_native_browser_require_identification,
-        ).await;
-        *self.browser_monitor.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = monitor;
+            settings.enhancements_enabled
+                && settings.codex_app_native_browser_require_identification,
+        )
+        .await;
+        *self
+            .browser_monitor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = monitor;
     }
 
     async fn stop_native_browser_compatibility(&self) {
-        let monitor = self.browser_monitor.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+        let monitor = self
+            .browser_monitor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
         if let Some(monitor) = monitor {
             monitor.stop().await;
         }
@@ -1185,66 +1199,22 @@ impl LauncherDataService {
 
 struct LauncherRuntimeService {
     debug_port: Mutex<u16>,
-    websocket_url: Mutex<Option<String>>,
-    user_scripts: UserScriptManager,
 }
 
 impl LauncherRuntimeService {
-    fn new(debug_port: u16, user_scripts: UserScriptManager) -> Self {
+    fn new(debug_port: u16) -> Self {
         Self {
             debug_port: Mutex::new(debug_port),
-            websocket_url: Mutex::new(None),
-            user_scripts,
         }
     }
 
     fn set_debug_port(&self, debug_port: u16) {
         *self.debug_port.lock().unwrap() = debug_port;
     }
-
-    fn set_websocket_url(&self, websocket_url: &str) {
-        *self.websocket_url.lock().unwrap() = Some(websocket_url.to_string());
-    }
 }
 
 #[async_trait::async_trait]
 impl BridgeRuntimeService for LauncherRuntimeService {
-    async fn user_script_inventory(&self) -> anyhow::Result<Value> {
-        self.user_scripts.inventory()
-    }
-
-    async fn user_script_inventory_with_runtime_status(
-        &self,
-        payload: Value,
-    ) -> anyhow::Result<Value> {
-        self.user_scripts
-            .inventory_with_runtime_status(payload.get("runtime_status"))
-    }
-
-    async fn set_user_scripts_enabled(&self, enabled: bool) -> anyhow::Result<Value> {
-        self.user_scripts.set_global_enabled(enabled)?;
-        self.user_scripts.inventory()
-    }
-
-    async fn set_user_script_enabled(&self, key: String, enabled: bool) -> anyhow::Result<Value> {
-        self.user_scripts.set_script_enabled(&key, enabled)?;
-        self.user_scripts.inventory()
-    }
-
-    async fn delete_user_script(&self, key: String) -> anyhow::Result<Value> {
-        self.user_scripts.delete_user_script(&key)?;
-        self.user_scripts.inventory()
-    }
-
-    async fn reload_user_scripts(&self) -> anyhow::Result<Value> {
-        let bundle = self.user_scripts.build_enabled_bundle()?;
-        let websocket_url = self.websocket_url.lock().unwrap().clone();
-        if let Some(websocket_url) = websocket_url.filter(|_| !bundle.trim().is_empty()) {
-            codex_plus_core::bridge::evaluate_script(&websocket_url, &bundle).await?;
-        }
-        self.user_scripts.inventory()
-    }
-
     async fn open_devtools(&self) -> anyhow::Result<Value> {
         let debug_port = *self.debug_port.lock().unwrap();
         let targets = codex_plus_core::cdp::list_targets(debug_port).await?;
@@ -1311,38 +1281,6 @@ impl BridgeRuntimeService for LauncherRuntimeService {
         Ok(codex_plus_core::model_catalog::read_codex_model_catalog().await)
     }
 
-    async fn zed_remote_status(&self) -> anyhow::Result<Value> {
-        Ok(codex_plus_core::zed_remote::zed_remote_status())
-    }
-
-    async fn resolve_zed_remote_host(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(codex_plus_core::zed_remote::resolve_ssh_target_response(
-            &payload,
-        ))
-    }
-
-    async fn fallback_zed_remote_request(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(codex_plus_core::zed_remote::fallback_open_request_response(
-            &payload,
-        ))
-    }
-
-    async fn open_zed_remote(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(codex_plus_core::zed_remote::open_zed_remote(&payload))
-    }
-
-    async fn list_zed_remote_projects(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(codex_plus_core::zed_remote::list_zed_remote_projects_response(&payload))
-    }
-
-    async fn remember_zed_remote_project(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(codex_plus_core::zed_remote::remember_zed_remote_project_response(&payload))
-    }
-
-    async fn forget_zed_remote_project(&self, payload: Value) -> anyhow::Result<Value> {
-        Ok(codex_plus_core::zed_remote::forget_zed_remote_project_response(&payload))
-    }
-
     async fn upstream_worktree_status(&self) -> anyhow::Result<Value> {
         Ok(codex_plus_core::upstream_worktree::status_response())
     }
@@ -1399,7 +1337,7 @@ async fn try_inject_with_context(
     debug_port: u16,
     helper_port: u16,
     ctx: BridgeContext,
-    runtime: Arc<LauncherRuntimeService>,
+    _runtime: Arc<LauncherRuntimeService>,
 ) -> anyhow::Result<()> {
     let targets = codex_plus_core::cdp::list_targets(debug_port).await?;
     let target = codex_plus_core::cdp::pick_injectable_codex_page_target(&targets)?;
@@ -1407,20 +1345,10 @@ async fn try_inject_with_context(
         .web_socket_debugger_url
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("selected CDP target has no websocket URL"))?;
-    runtime.set_websocket_url(websocket_url);
     let settings = codex_plus_core::settings::SettingsStore::default()
         .load()
         .unwrap_or_default();
     let script = codex_plus_core::assets::injection_script_with_settings(helper_port, &settings);
-    let user_bundle = runtime
-        .user_scripts
-        .build_enabled_bundle()
-        .unwrap_or_default();
-    let new_document_scripts = if user_bundle.is_empty() {
-        vec![script]
-    } else {
-        vec![script, user_bundle]
-    };
     codex_plus_core::bridge::install_bridge(
         websocket_url,
         codex_plus_core::bridge::BRIDGE_BINDING_NAME,
@@ -1430,7 +1358,7 @@ async fn try_inject_with_context(
                 Ok(codex_plus_core::routes::handle_bridge_request(ctx, &path, payload).await)
             })
         }),
-        &new_document_scripts,
+        &[script],
     )
     .await
 }
@@ -1471,31 +1399,6 @@ fn open_url(url: &str) -> anyhow::Result<()> {
     }
 }
 
-fn default_user_script_manager() -> UserScriptManager {
-    let config_dir = default_user_scripts_config_dir();
-    UserScriptManager::new(
-        builtin_user_scripts_dir(),
-        config_dir.join("user_scripts"),
-        config_dir.join("user_scripts.json"),
-    )
-}
-
-fn default_user_scripts_config_dir() -> PathBuf {
-    if cfg!(windows) {
-        if let Some(roaming) = std::env::var_os("APPDATA") {
-            return PathBuf::from(roaming).join("Codex++");
-        }
-        if let Some(home) = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()) {
-            return home.join("AppData").join("Roaming").join("Codex++");
-        }
-    }
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".config")))
-        .unwrap_or_else(|| PathBuf::from(".config"))
-        .join("Codex++")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1526,15 +1429,9 @@ mod tests {
 
     #[test]
     fn z8_entry_routes_missing_account_or_provider_to_manager() {
-        assert_eq!(
-            z8_entry_decision_kind(false),
-            Z8EntryDecision::OpenManager
-        );
+        assert_eq!(z8_entry_decision_kind(false), Z8EntryDecision::OpenManager);
         assert!(z8_entry_decision(false));
-        assert_eq!(
-            z8_entry_decision_kind(true),
-            Z8EntryDecision::LaunchCodex
-        );
+        assert_eq!(z8_entry_decision_kind(true), Z8EntryDecision::LaunchCodex);
         assert!(!z8_entry_decision(true));
     }
 
@@ -1564,23 +1461,20 @@ mod tests {
             "user": {"email": "test@example.com"}
         }))
         .unwrap();
-        let inactive_key = codex_plus_core::z8_account::AccountApiKey::from_persisted_value(
-            &json!({
+        let inactive_key =
+            codex_plus_core::z8_account::AccountApiKey::from_persisted_value(&json!({
                 "id": "1",
                 "name": "Test key",
                 "status": "revoked",
                 "key": "sk-test",
-            }),
-        )
-        .unwrap();
-        let active_key = codex_plus_core::z8_account::AccountApiKey::from_persisted_value(
-            &json!({
-                "id": "2",
-                "name": "Test key",
-                "status": "active",
-                "key": "sk-test-2",
-            }),
-        )
+            }))
+            .unwrap();
+        let active_key = codex_plus_core::z8_account::AccountApiKey::from_persisted_value(&json!({
+            "id": "2",
+            "name": "Test key",
+            "status": "active",
+            "key": "sk-test-2",
+        }))
         .unwrap();
 
         let account_without_provider = PersistedAccount {
@@ -1672,9 +1566,8 @@ env_key = "OPENAI_API_KEY"
 
     #[test]
     fn top_level_launcher_errors_without_app_path_keep_actionable_message() {
-        let error = anyhow::anyhow!(
-            "请先安装官方 Codex/ChatGPT 桌面应用，或在设置中选择其安装目录。"
-        );
+        let error =
+            anyhow::anyhow!("请先安装官方 Codex/ChatGPT 桌面应用，或在设置中选择其安装目录。");
 
         let message = redact_launcher_error_message(&error, None);
 
@@ -1699,13 +1592,11 @@ env_key = "OPENAI_API_KEY"
 
     #[test]
     fn launcher_accepts_only_a_completed_provider_sync() {
-        assert!(
-            require_completed_provider_sync(
-                &codex_plus_data::ProviderSyncStatus::Synced,
-                "Provider sync complete",
-            )
-            .is_ok()
-        );
+        assert!(require_completed_provider_sync(
+            &codex_plus_data::ProviderSyncStatus::Synced,
+            "Provider sync complete",
+        )
+        .is_ok());
 
         for status in [
             codex_plus_data::ProviderSyncStatus::Disabled,
@@ -1866,10 +1757,8 @@ env_key = "OPENAI_API_KEY"
         assert!(source.contains("async fn ensure_plugin_marketplace_config"));
         assert!(source.contains("self.core.ensure_plugin_marketplace_config(settings).await"));
         assert!(source.contains("async fn ensure_active_protocol_proxy_config"));
-        assert!(
-            compact_source
-                .contains("self.core.ensure_active_protocol_proxy_config(settings).await")
-        );
+        assert!(compact_source
+            .contains("self.core.ensure_active_protocol_proxy_config(settings).await"));
     }
 
     #[tokio::test]
@@ -1884,14 +1773,7 @@ env_key = "OPENAI_API_KEY"
                 db_path: test_dir.join("state.sqlite"),
                 backup_dir: test_dir.join("backups"),
             }),
-            runtime: Arc::new(LauncherRuntimeService::new(
-                9229,
-                UserScriptManager::new(
-                    test_dir.join("builtin"),
-                    test_dir.join("user"),
-                    test_dir.join("settings.json"),
-                ),
-            )),
+            runtime: Arc::new(LauncherRuntimeService::new(9229)),
             bridge_context: Arc::new(Mutex::new(None)),
             browser_monitor: Arc::new(Mutex::new(None)),
         };
@@ -1903,12 +1785,4 @@ env_key = "OPENAI_API_KEY"
 
         assert_ne!(result["message"], "Unknown bridge path");
     }
-}
-
-fn builtin_user_scripts_dir() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .map(|path| path.join("user_scripts"))
-        .unwrap_or_else(|| PathBuf::from("user_scripts"))
 }

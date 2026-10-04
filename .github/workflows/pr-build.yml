@@ -18,6 +18,9 @@ jobs:
           - arch: x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,9 +67,7 @@ jobs:
         run: npm run vite:build
 
       - name: Rust tests
-        run: |
-          cargo test --workspace --exclude codex-plus-manager --locked --target ${{ matrix.target }}
-          cargo test -p codex-plus-manager --locked --target ${{ matrix.target }} --test z8_brand_installer --test windows_subsystem
+        run: cargo test --workspace --locked --target ${{ matrix.target }}
 
       - name: Build release binaries
         run: cargo build --release --locked --target ${{ matrix.target }}
