@@ -8,12 +8,15 @@ import {
   shouldResetCaptchaAfterFailure,
   authSettingsRequireCaptcha,
   canSubmitAuth,
+  isImagegenApiKey,
+  isProgrammingApiKey,
   isSuccessfulAccountCommand,
   normalizeAccountPayload,
   normalizeRedeemAccount,
   resolveCaptchaProvider,
   resolveLoginAgreement,
   selectAccountKeyId,
+  selectImagegenKeyId,
 } from "./account-flow";
 import { canSubmitRedeem, completeAuthenticatedAccount, isProviderCheckHealthy, Z8AgreementDocuments, Z8SubmitForm } from "./Z8AccountPanel";
 
@@ -110,6 +113,18 @@ test("selects the server-marked usable key and falls back when it is unavailable
   ];
   assert.equal(selectAccountKeyId({ keys }), "active");
   assert.equal(selectAccountKeyId({ keys: [] }), "");
+});
+
+test("keeps an image-generation key out of programming defaults", () => {
+  const keys = [
+    { id: "image", name: "默认生图 API Key", status: "active", secret: { masked: "x", fingerprint: "x" }, selected: true },
+    { id: "programming", name: "默认 API Key", status: "active", secret: { masked: "x", fingerprint: "x" }, selected: false },
+  ];
+  assert.equal(isImagegenApiKey(keys[0]), true);
+  assert.equal(isProgrammingApiKey(keys[0]), false);
+  assert.equal(isProgrammingApiKey(keys[1]), true);
+  assert.equal(selectAccountKeyId({ keys }), "programming");
+  assert.equal(selectImagegenKeyId({ keys }), "image");
 });
 
 test("failed account commands are not treated as state commits", () => {

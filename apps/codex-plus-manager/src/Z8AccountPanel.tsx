@@ -29,6 +29,8 @@ import {
   AuthSettingsPayload,
   canSubmitAuth,
   isUsableApiKey,
+  isImagegenApiKey,
+  isProgrammingApiKey,
   isSuccessfulAccountCommand,
   LoginAgreementDocument,
   normalizeAccountPayload,
@@ -37,6 +39,7 @@ import {
   resolveLoginAgreement,
   RedeemResult,
   selectAccountKeyId,
+  selectImagegenKeyId,
 } from "./account-flow";
 import { CaptchaChallenge, CaptchaProof } from "./CaptchaWidgets";
 
@@ -310,6 +313,14 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
     () => account.keys.filter(isUsableApiKey),
     [account.keys],
   );
+  const programmingKeys = useMemo(
+    () => account.keys.filter(isProgrammingApiKey),
+    [account.keys],
+  );
+  const imagegenKeys = useMemo(() => {
+    const configuredKeyId = imagegenStatus?.keyId;
+    return account.keys.filter((key) => isImagegenApiKey(key) || key.id === configuredKeyId);
+  }, [account.keys, imagegenStatus?.keyId]);
   const openLegalLink = async (url: string) => {
     try {
       const result = await invoke<{ status: string; message: string }>("open_external_url", { url });
@@ -333,7 +344,7 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
   ) : null;
 
   const selectKey = (next: AccountPayload, preferredKey = selectedKey) => {
-    const preferred = preferredKey && next.keys.some((key) => key.id === preferredKey && isUsableApiKey(key))
+    const preferred = preferredKey && next.keys.some((key) => key.id === preferredKey && isUsableApiKey(key) && isProgrammingApiKey(key))
       ? preferredKey
       : selectAccountKeyId(next);
     setSelectedKey(preferred);
@@ -568,12 +579,15 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
 
   useEffect(() => {
     if (!imagegenStatus) return;
-    if (!imagegenKey && imagegenStatus.keyId && usableKeys.some((key) => key.id === imagegenStatus.keyId)) {
-      setImagegenKey(imagegenStatus.keyId);
+    if (!imagegenKey) {
+      const rememberedKey = imagegenStatus.keyId && usableKeys.some((key) => key.id === imagegenStatus.keyId)
+        ? imagegenStatus.keyId
+        : selectImagegenKeyId(account);
+      if (rememberedKey) setImagegenKey(rememberedKey);
     }
     if (!imagegenModel && imagegenStatus.model) setImagegenModel(imagegenStatus.model);
     if (!imagegenModels.length && imagegenStatus.models?.length) setImagegenModels(imagegenStatus.models);
-  }, [imagegenStatus, imagegenKey, imagegenModel, imagegenModels.length, usableKeys]);
+  }, [account.keys, imagegenStatus, imagegenKey, imagegenModel, imagegenModels.length, usableKeys]);
 
   useEffect(() => {
     if (verificationCooldown <= 0) return;
@@ -1014,7 +1028,7 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
                     <div className="z8-section-heading"><div><h3 id={`${fieldId}-keys-heading`}>API Key</h3></div></div>
                     <div className="z8-key-group">
                       <div className="z8-key-group-heading"><h4>编程多模态</h4><div className="z8-section-heading-actions z8-key-group-heading-actions"><Button variant="outline" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleCheck()} title="检查 Z8 Provider"><Activity aria-hidden="true" />检查</Button><Button variant="outline" disabled={busy !== null || !onReset} onClick={() => void handleReset()} title="恢复 Z8 默认供应商配置"><RotateCcw aria-hidden="true" />重置配置</Button></div></div>
-                      {account.keys.length ? <div className="z8-key-select-row"><KeyRound aria-hidden="true" /><Label htmlFor={`${fieldId}-key`} className="sr-only">编程 / 多模态 API Key</Label><select id={`${fieldId}-key`} value={selectedKey} onChange={(event) => { const nextKey = event.currentTarget.value; resetLaunchState(); setSelectedKey(nextKey); setProviderCheck(null); setProviderAppliedKey(null); void handleApply(nextKey); }} disabled={busy !== null || launchState === "starting"}><option value="" disabled>请选择编程 / 多模态 API Key</option>{account.keys.map((key) => <option key={key.id} value={key.id} disabled={!isUsableApiKey(key)}>{key.name} · {key.secret.masked} · {key.status}</option>)}</select><Button variant="secondary" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleApply()} title="应用当前 API Key"><Check aria-hidden="true" />使用</Button></div> : <p className="field-hint">当前账户没有可用 API Key，请先兑换或刷新。</p>}
+                      {programmingKeys.length ? <div className="z8-key-select-row"><KeyRound aria-hidden="true" /><Label htmlFor={`${fieldId}-key`} className="sr-only">编程 / 多模态 API Key</Label><select id={`${fieldId}-key`} value={selectedKey} onChange={(event) => { const nextKey = event.currentTarget.value; resetLaunchState(); setSelectedKey(nextKey); setProviderCheck(null); setProviderAppliedKey(null); void handleApply(nextKey); }} disabled={busy !== null || launchState === "starting"}><option value="" disabled>请选择编程 / 多模态 API Key</option>{programmingKeys.map((key) => <option key={key.id} value={key.id} disabled={!isUsableApiKey(key)}>{key.name} · {key.secret.masked} · {key.status}</option>)}</select><Button variant="secondary" disabled={busy !== null || !selectedKey || !usableKeys.some((key) => key.id === selectedKey)} onClick={() => void handleApply()} title="应用当前 API Key"><Check aria-hidden="true" />使用</Button></div> : <p className="field-hint">当前账户没有可用的编程 / 多模态 API Key，请先兑换或刷新。</p>}
                       {providerAppliedKey === selectedKey && selectedKey || providerCheck ? (
                         <div className="z8-provider-status-row" aria-live="polite">
                           {providerAppliedKey === selectedKey && selectedKey ? <p className="field-hint good z8-provider-applied" role="status">写入成功</p> : <span aria-hidden="true" />}
@@ -1025,7 +1039,7 @@ export function Z8AccountPanel({ onLaunch, onReset, onAuthenticated, onClose }: 
                     <div className="z8-key-group z8-imagegen-group">
                       <div className="z8-key-group-heading"><h4 id={`${fieldId}-imagegen-heading`}>生图</h4><div className="z8-section-heading-actions z8-imagegen-heading-actions"><Button variant="outline" disabled={busy !== null || imagegenModelsLoading || !imagegenKey || imagegenStatus?.skillReady === false} onClick={() => void syncAndApplyImagegen(imagegenKey)} title="自动配置 imagegen-Z8"><RefreshCw aria-hidden="true" />自动配置</Button><Button variant="outline" disabled={busy !== null || !imagegenStatus?.managed} onClick={() => void resetImagegen()} title="重置 imagegen-Z8 配置"><RotateCcw aria-hidden="true" />重置配置</Button></div></div>
                       {imagegenStatus?.skillReady === false ? <div className="z8-imagegen-skill-warning"><p className="field-hint bad" role="alert">imagegen-Z8 skill 尚未就绪，生图 Key 暂时不能写入。</p><Button variant="secondary" disabled={busy !== null} onClick={() => void run<AccountCommandResult<ImagegenStatus>>("z8_imagegen_skill_repair").then((result) => { if (result && isSuccessfulAccountCommand(result)) { setImagegenStatus(result); setImagegenError(""); setNotice("imagegen-Z8 skill 已重新安装"); } else if (result) setImagegenError(result.message || "重新安装 imagegen-Z8 skill 失败"); })} title="重新安装 imagegen-Z8 skill"><RotateCcw aria-hidden="true" />重新安装 skill</Button></div> : null}
-                      {usableKeys.length ? <div className="z8-key-select-row"><KeyRound aria-hidden="true" /><Label htmlFor={`${fieldId}-imagegen-key`} className="sr-only">生图 API Key</Label><select id={`${fieldId}-imagegen-key`} value={imagegenKey} onChange={(event) => { const nextKey = event.currentTarget.value; setImagegenKey(nextKey); setImagegenModel(""); setImagegenModels([]); setImagegenAppliedKey(null); setImagegenError(""); void syncAndApplyImagegen(nextKey); }} disabled={busy !== null || imagegenModelsLoading || imagegenStatus?.skillReady === false}><option value="" disabled>请选择生图 API Key</option>{account.keys.map((key) => <option key={key.id} value={key.id} disabled={!isUsableApiKey(key)}>{key.name} · {key.secret.masked} · {key.status}</option>)}</select><Button variant="secondary" disabled={busy !== null || imagegenModelsLoading || !imagegenKey || imagegenStatus?.skillReady === false} onClick={() => void syncAndApplyImagegen(imagegenKey)} title="应用当前生图 API Key"><Check aria-hidden="true" />使用</Button></div> : <p className="field-hint">当前账户没有可用 API Key，请先兑换或刷新。</p>}
+                      {imagegenKeys.length ? <div className="z8-key-select-row"><KeyRound aria-hidden="true" /><Label htmlFor={`${fieldId}-imagegen-key`} className="sr-only">生图 API Key</Label><select id={`${fieldId}-imagegen-key`} value={imagegenKey} onChange={(event) => { const nextKey = event.currentTarget.value; setImagegenKey(nextKey); setImagegenModel(""); setImagegenModels([]); setImagegenAppliedKey(null); setImagegenError(""); void syncAndApplyImagegen(nextKey); }} disabled={busy !== null || imagegenModelsLoading || imagegenStatus?.skillReady === false}><option value="" disabled>请选择生图 API Key</option>{imagegenKeys.map((key) => <option key={key.id} value={key.id} disabled={!isUsableApiKey(key)}>{key.name} · {key.secret.masked} · {key.status}</option>)}</select><Button variant="secondary" disabled={busy !== null || imagegenModelsLoading || !imagegenKey || imagegenStatus?.skillReady === false} onClick={() => void syncAndApplyImagegen(imagegenKey)} title="应用当前生图 API Key"><Check aria-hidden="true" />使用</Button></div> : <p className="field-hint">当前账户没有识别到生图 API Key，请先刷新账户。</p>}
                       {imagegenModels.length ? <details className="z8-imagegen-catalog"><summary>已同步模型目录（{imagegenModels.length} 个）</summary><p>{imagegenModels.join("、")}</p></details> : null}
                       {imagegenError ? <p className="field-hint bad" role="alert">{imagegenError}</p> : imagegenAppliedKey === imagegenKey && imagegenKey && imagegenStatus?.configured ? <p className="field-hint good" role="status">已写入 imagegen-Z8，可调用生图。</p> : imagegenStatus?.configured ? <p className="field-hint good" role="status">已配置 imagegen-Z8，可调用生图。</p> : null}
                     </div>

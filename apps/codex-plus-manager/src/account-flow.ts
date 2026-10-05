@@ -1,3 +1,5 @@
+export type ApiKeyPurpose = "programming" | "imagegen" | "unknown";
+
 export type ApiKeySummary = {
   id: string;
   name: string;
@@ -5,6 +7,8 @@ export type ApiKeySummary = {
   secret: { masked: string; fingerprint: string };
   createdAt?: string | null;
   expiresAt?: string | null;
+  /** Optional server hint. Older account services only return the key name. */
+  purpose?: ApiKeyPurpose;
   selected: boolean;
 };
 
@@ -20,6 +24,15 @@ export type AccountPayload = {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
+
+function normalizeApiKeyPurpose(value: unknown): ApiKeyPurpose | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["image", "imagegen", "image_generation", "image_generation_key", "生图"].includes(normalized)) return "imagegen";
+  if (["programming", "coding", "multimodal", "program", "编程", "多模态"].includes(normalized)) return "programming";
+  if (normalized === "unknown") return "unknown";
+  return undefined;
+}
 
 /**
  * Keep renderer state safe when a successful backend response is incomplete.
@@ -38,6 +51,7 @@ function normalizeApiKey(value: unknown): ApiKeySummary | null {
     secret: { masked: value.secret.masked, fingerprint: value.secret.fingerprint },
     createdAt: typeof value.createdAt === "string" ? value.createdAt : null,
     expiresAt: typeof value.expiresAt === "string" ? value.expiresAt : null,
+    purpose: normalizeApiKeyPurpose(value.purpose),
     selected: value.selected === true,
   };
 }
@@ -67,12 +81,45 @@ export function isUsableApiKey(key: Pick<ApiKeySummary, "status">): boolean {
   return key.status === "active" || key.status === "enabled" || key.status === "available";
 }
 
-/** Select the server-marked key, falling back to the first usable key. */
+type ApiKeyClassifierInput = Pick<ApiKeySummary, "name"> & {
+  purpose?: ApiKeyPurpose;
+};
+
+// The Z8 account service currently does not include group capabilities in every
+// `/keys` response. Keep the fallback tied to the server-created image key name
+// so a new account can still be classified before the first model probe.
+const IMAGEGEN_KEY_NAME_PATTERN = /(?:生图|文生图|图像生成|图片生成|绘图|画图|image\s*(?:gen(?:eration)?|create|creation)|imagegen|text[-_\s]?to[-_\s]?image|dall[-_\s]?e|dalle|imagen|flux|stable[-_\s]?diffusion|sdxl|midjourney|seedream|qwen[-_\s]?image|ideogram|recraft|kling)/i;
+
+export function apiKeyPurpose(key: ApiKeyClassifierInput): ApiKeyPurpose {
+  if (key.purpose === "imagegen" || key.purpose === "programming" || key.purpose === "unknown") {
+    return key.purpose;
+  }
+  return IMAGEGEN_KEY_NAME_PATTERN.test(key.name) ? "imagegen" : "unknown";
+}
+
+export function isImagegenApiKey(key: ApiKeyClassifierInput): boolean {
+  return apiKeyPurpose(key) === "imagegen";
+}
+
+/** Treat keys without an image-generation marker as programming-compatible. */
+export function isProgrammingApiKey(key: ApiKeyClassifierInput): boolean {
+  return !isImagegenApiKey(key);
+}
+
+/** Select a programming-compatible key, preferring the server-marked choice. */
 export function selectAccountKeyId(account: Pick<AccountPayload, "keys">): string {
   const keys = Array.isArray(account.keys) ? account.keys : [];
-  return keys.find((key) => key.selected && isUsableApiKey(key))?.id
-    ?? keys.find(isUsableApiKey)?.id
+  const usableKeys = keys.filter(isUsableApiKey);
+  return usableKeys.find((key) => key.selected && isProgrammingApiKey(key))?.id
+    ?? usableKeys.find(isProgrammingApiKey)?.id
+    ?? usableKeys[0]?.id
     ?? "";
+}
+
+/** Select the first usable key identified as an image-generation key. */
+export function selectImagegenKeyId(account: Pick<AccountPayload, "keys">): string {
+  return (Array.isArray(account.keys) ? account.keys : [])
+    .find((key) => isUsableApiKey(key) && isImagegenApiKey(key))?.id ?? "";
 }
 
 export type AccountAuthSettings = {
