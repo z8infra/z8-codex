@@ -11,7 +11,7 @@ PROJECT_DIR="$REPO_DIR/apps/codex-plus-manager"
 BUILD_DIR="$REPO_DIR/.linux-build"
 DEB_DIR="$BUILD_DIR/deb"
 PACKAGE_NAME="codex-plus-plus"
-VERSION="${1:-1.4.0}"
+VERSION="${1:-1.3.8}"
 ARCH="$(dpkg --print-architecture)"
 # Node / 包管理器：优先从环境变量取，其次探测 PATH。
 # 不要写死绝对路径——这里是给所有贡献者和 CI 用的，不是某台机器的构建脚本。
