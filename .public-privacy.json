@@ -1,0 +1,418 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "kind": "email",
+      "path": "apps/codex-plus-manager/qa-z8-smoke.html",
+      "sha256": "1c3ed2d340aecabb04646f78e49692b8dc9f0057057b53515e2a401c361c48ae",
+      "reason": "Reviewed pre-existing public attribution/contact or synthetic test address; retain required attribution."
+    },
+    {
+      "kind": "email",
+      "path": "apps/codex-plus-manager/src-tauri/resources/imagegen-z8.zip!imagegen-z8-main/imagegen-z8/src/main_test.go",
+      "sha256": "7e003e0a0f46c5516cf8c32f1b2f8d85ff403c58038351539957ccbdb0d8a593",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "email",
+      "path": "apps/codex-plus-manager/src-tauri/tests/z8_brand_installer.rs",
+      "sha256": "8f76c77e8c8c09814dde39af1a14938cb7b370f393e3a1f91ce658bc0d776271",
+      "reason": "Reviewed pre-existing public attribution/contact or synthetic test address; retain required attribution."
+    },
+    {
+      "kind": "email",
+      "path": "apps/codex-plus-manager/src/aggregate-routes.test.ts",
+      "sha256": "3eaa5ca6207ff84c43e1c5c37682e19c4104f2b80f29a8a6b71e8dc181ee55aa",
+      "reason": "Reviewed pre-existing public attribution/contact or synthetic test address; retain required attribution."
+    },
+    {
+      "kind": "email",
+      "path": "apps/codex-plus-manager/src/aggregate-routes.ts",
+      "sha256": "3eaa5ca6207ff84c43e1c5c37682e19c4104f2b80f29a8a6b71e8dc181ee55aa",
+      "reason": "Reviewed pre-existing public attribution/contact or synthetic test address; retain required attribution."
+    },
+    {
+      "kind": "email",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/app-6a16bcb9a37081919b0db1d81010fb2f/.codex-plugin/plugin.json",
+      "sha256": "61b5d79682e9ae5de411043454af238320e06f6643de8ad1df1549810db773c7",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "email",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/creative-production/.codex-plugin/plugin.json",
+      "sha256": "195f382b0c27e4bd3b0e9bf26082f64ee1e3041c10b8224006a3237a6a5b6b50",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "email",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/creative-production/.codex-plugin/plugin.json",
+      "sha256": "d3d0d41b642f575699e1ea956d356f4eb6056a538b8eb43356d9ad1653a7e2cb",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "email",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/metabase/.codex-plugin/plugin.json",
+      "sha256": "5def1c1b13d588a9c4bdade21340d7eeb8541c2dcb9af5ec183959a7c8163d89",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "email",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/product-design/.codex-plugin/plugin.json",
+      "sha256": "8cdaabd00fb788a30abe488d4fec25a2341dbbe0596f25af449631e39ab613a4",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "email",
+      "path": "crates/codex-plus-core/src/connect/mod.rs",
+      "sha256": "c44667dfdd0c9557c30193ee0be703253bf019b8281088d2e4a32ecd9bfd0979",
+      "reason": "Reviewed pre-existing public attribution/contact or synthetic test address; retain required attribution."
+    },
+    {
+      "kind": "email",
+      "path": "crates/codex-plus-core/src/connect/mod.rs",
+      "sha256": "d5d0bcf537bffabe0c7a4f09b5cb229be3f31e9ccb65fe0f7ec839043c53f989",
+      "reason": "Reviewed pre-existing public attribution/contact or synthetic test address; retain required attribution."
+    },
+    {
+      "kind": "email",
+      "path": "crates/codex-plus-core/src/relay_rotation.rs",
+      "sha256": "3eaa5ca6207ff84c43e1c5c37682e19c4104f2b80f29a8a6b71e8dc181ee55aa",
+      "reason": "Reviewed pre-existing public attribution/contact or synthetic test address; retain required attribution."
+    },
+    {
+      "kind": "email",
+      "path": "scripts/release/test_build_third_party_notices.py",
+      "sha256": "c4e15b25a1b3499cb3b1aab100a19d1042c96e10e59ab0835ae208d60ab7d7a6",
+      "reason": "Reviewed pre-existing public attribution/contact or synthetic test address; retain required attribution."
+    },
+    {
+      "kind": "email",
+      "path": "tools/conversation-canvas/external-api.test.mjs",
+      "sha256": "cc03919879fd017617bc3c97e841982020fc7cebc2a1c09034c48e70c330d74c",
+      "reason": "Reviewed pre-existing public attribution/contact or synthetic test address; retain required attribution."
+    },
+    {
+      "kind": "gitleaks",
+      "path": "apps/codex-plus-manager/src-tauri/src/commands.rs",
+      "rule": "generic-api-key",
+      "sha256": "9f03ff9e58b9220f6bf7a85f4a5040bc7a00383feae2fa4bd01b8065334040ff",
+      "reason": "Reviewed known false positive: fixed test value, ordinary documentation text, or JavaScript expression."
+    },
+    {
+      "kind": "gitleaks",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/data-analytics/assets/datascience-artifact-widget.html.gz.b64[decoded]",
+      "rule": "generic-api-key",
+      "sha256": "e3bf702f38cf8d6a636a040342ec21c093b41fb1ce0677f50f943c0626b99ac5",
+      "reason": "Reviewed known false positive: fixed test value, ordinary documentation text, or JavaScript expression."
+    },
+    {
+      "kind": "gitleaks",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/investment-banking/skills/three-statement-model-builder/references/investment-banking-integrations.md",
+      "rule": "generic-api-key",
+      "sha256": "514369ac69030e02f831ef9df2e7543be6248f1029e703f8d31f4cc4dc879ba8",
+      "reason": "Reviewed known false positive: fixed test value, ordinary documentation text, or JavaScript expression."
+    },
+    {
+      "kind": "gitleaks",
+      "path": "crates/codex-plus-core/src/native_browser.rs",
+      "rule": "generic-api-key",
+      "sha256": "9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f",
+      "reason": "Reviewed known false positive: fixed test value, ordinary documentation text, or JavaScript expression."
+    },
+    {
+      "kind": "gitleaks",
+      "path": "crates/codex-plus-core/src/provider_import.rs",
+      "rule": "generic-api-key",
+      "sha256": "27c122f97c0bb798df1b57b3b0651e7aad36e49968c1ec227ef99348a599fa7d",
+      "reason": "Reviewed known false positive: fixed test value, ordinary documentation text, or JavaScript expression."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "apps/codex-plus-launcher/src/main.rs",
+      "sha256": "00972730418a7162de772314b2d4b1c0e2bbbde571cb1c7b2105afa671c75df5",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "apps/codex-plus-launcher/src/main.rs",
+      "sha256": "396ee0fbb995d7c14b9cdcff20344c27179711ae2438532dc9196aeebc4cee5c",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "apps/codex-plus-manager/src-tauri/src/commands.rs",
+      "sha256": "6b98ff7f0398f06452f19c4a93f3d69186401dab40aaa7077b394ef59b3e730e",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "apps/codex-plus-manager/src-tauri/src/commands.rs",
+      "sha256": "73d43c3e91173d80f9e570f72a644551e76731f883ad3cdae23b55fac3437994",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "apps/codex-plus-manager/src-tauri/src/commands.rs",
+      "sha256": "e71681643ee7c2e7f6f3bdb47c729062e12efc955398fdfb33be137ddcff2b91",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "apps/codex-plus-manager/src-tauri/src/commands.rs",
+      "sha256": "ed9203c8078e4c6b832600085f28f24656d679aa8dca82ecc2557afc3df25036",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/data-analytics/skills/create-data-context/tests/__pycache__/test_state_helpers.cpython-312-pytest-9.0.3.pyc![binary strings]",
+      "sha256": "afbb314feab150ce45fb25cbcca9d10710f894ab822cbdcc29860ef70ae1923a",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/data-analytics/src/analytics-app/scripts/__pycache__/chart_contract.cpython-312.pyc![binary strings]",
+      "sha256": "afbb314feab150ce45fb25cbcca9d10710f894ab822cbdcc29860ef70ae1923a",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/data-analytics/src/analytics-app/scripts/__pycache__/design_contract.cpython-312.pyc![binary strings]",
+      "sha256": "afbb314feab150ce45fb25cbcca9d10710f894ab822cbdcc29860ef70ae1923a",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/data-analytics/src/analytics-app/scripts/__pycache__/package_utils.cpython-312.pyc![binary strings]",
+      "sha256": "afbb314feab150ce45fb25cbcca9d10710f894ab822cbdcc29860ef70ae1923a",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/data-analytics/src/analytics-app/scripts/tests/__pycache__/test_package_utils.cpython-312-pytest-9.0.3.pyc![binary strings]",
+      "sha256": "afbb314feab150ce45fb25cbcca9d10710f894ab822cbdcc29860ef70ae1923a",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/data-analytics/tests/__pycache__/test_app_dependencies.cpython-312-pytest-9.0.3.pyc![binary strings]",
+      "sha256": "afbb314feab150ce45fb25cbcca9d10710f894ab822cbdcc29860ef70ae1923a",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/investment-banking/skills/investment-banking/internal-support/dashboard-builder/tests/fixtures/sample_gamestop_ebay_hybrid_contract.json",
+      "sha256": "834f7ee0e808a12455b68b910dc58f5fc7f45f09c53daa6de99944c9a5f2c587",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/investment-banking/skills/investment-banking/internal-support/dashboard-builder/tests/test_render_dashboard.py",
+      "sha256": "834f7ee0e808a12455b68b910dc58f5fc7f45f09c53daa6de99944c9a5f2c587",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "assets/plugin-marketplaces/openai-curated-remote.zip!plugins/investment-banking/skills/investment-banking/internal-support/dashboard-builder/tests/test_render_dashboard.py",
+      "sha256": "e9b279a6c0bfbbf9e57266dc848d0302f9df6ed57e96187cee9e590d0046f351",
+      "reason": "Reviewed bundled third-party contact/build metadata; contains no project credential."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/src/codex_home.rs",
+      "sha256": "10532ffeb97adbcdb106b159a12a3bb939fd46112209017e12649ffea1965c28",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/src/connect/mod.rs",
+      "sha256": "9b643592eff7717d751f0c26c390a634b6e6b8178fc9c54ac69fd657f2db2cf8",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/src/env_conflicts.rs",
+      "sha256": "21d0d59c5fc2ee35dcd3f44c9808ac9f19dc0bc69aabb2695d5a875bdb0583e0",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/src/relay_config.rs",
+      "sha256": "b98d692c4574a80e508cf6fa38e6f27ae5348e616448edaa7fe675e363669fd2",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/src/settings.rs",
+      "sha256": "66ae9804fdfebde920af2a3a6067b57f6abc86852e3088c7201f01394a594b9f",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/src/settings.rs",
+      "sha256": "ed9203c8078e4c6b832600085f28f24656d679aa8dca82ecc2557afc3df25036",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/src/upstream_worktree/remote/tests.rs",
+      "sha256": "ad18f6b08a593cf5c0d73646b17a78d96cd7aec459007251750b9e253fec9d92",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/bridge_routes.rs",
+      "sha256": "639ea7d69f4d58ebedd47e6cc378f20b8aa1013cba36eec186d3e06fee9c59f3",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/bridge_routes.rs",
+      "sha256": "ad18f6b08a593cf5c0d73646b17a78d96cd7aec459007251750b9e253fec9d92",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/installers.rs",
+      "sha256": "8ac10a8ce351b711709f5c0f37aee63b120a60eb117612cdf1682c83a323bc64",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/launcher.rs",
+      "sha256": "66ae9804fdfebde920af2a3a6067b57f6abc86852e3088c7201f01394a594b9f",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/node_repl_flattened_profile.rs",
+      "sha256": "9229eca6c0fb2f302afec7dc087bf38850873541e66c158e10471bad5137ed1e",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/relay_config.rs",
+      "sha256": "66ae9804fdfebde920af2a3a6067b57f6abc86852e3088c7201f01394a594b9f",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/relay_config.rs",
+      "sha256": "73d43c3e91173d80f9e570f72a644551e76731f883ad3cdae23b55fac3437994",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/relay_config.rs",
+      "sha256": "9d9561af130ddbdefda01fbbba24b75d2a297b9fcd435d25cb87e61cf8cd1884",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/relay_config.rs",
+      "sha256": "e71681643ee7c2e7f6f3bdb47c729062e12efc955398fdfb33be137ddcff2b91",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/upstream_worktree.rs",
+      "sha256": "ad18f6b08a593cf5c0d73646b17a78d96cd7aec459007251750b9e253fec9d92",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/watcher.rs",
+      "sha256": "66ae9804fdfebde920af2a3a6067b57f6abc86852e3088c7201f01394a594b9f",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/zed_remote.rs",
+      "sha256": "612b6fc44e3094a36043870b929ac5fb00daf8513229001e92a639fb827cac26",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/zed_remote.rs",
+      "sha256": "ad18f6b08a593cf5c0d73646b17a78d96cd7aec459007251750b9e253fec9d92",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-core/tests/zed_remote.rs",
+      "sha256": "fe0796cd9675564bd6ad63271cee18012733a3be9a83b1a55f1da0cfb0f9b8c5",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-data/src/storage.rs",
+      "sha256": "6068b208bcd426dcde4b9fd3de8c9b7f24476a4309d5646686cb4faaa0a9ee33",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-data/src/storage.rs",
+      "sha256": "87b301a1762c0e21fb9771ff220e9c32991e45c7985e11225498776514827723",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-data/src/storage.rs",
+      "sha256": "b6c03312cc4da97909452771d5eacf04a1e58d9916916b1f18143b137c6be319",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-data/src/storage.rs",
+      "sha256": "eb288e43c11952e1b541c45002e7f39f7b44cdb6e884d522601abc5fb29e2d70",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-data/src/storage.rs",
+      "sha256": "fa352f1bffecf7a910d5783168f090c253c5bb8c42e4eabbdc46bc2df23056d3",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-data/tests/wsl_rollout_path.rs",
+      "sha256": "07bb230d03ac41d6810311b331da335ba5ebdb146828b2a8c0166d1ff6becb0f",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "local_user_path",
+      "path": "crates/codex-plus-data/tests/wsl_rollout_path.rs",
+      "sha256": "edd4016c1d4b81fe0c8ebd6bb1c6a616f4a2fd324c6e53b1467a7a11e79f1957",
+      "reason": "Reviewed pre-existing test fixture or illustrative path; not a production identity."
+    },
+    {
+      "kind": "email",
+      "path": "scripts/security/test_public_privacy.py",
+      "sha256": "c558ea287eb6d64fdca4859b1881a23433a2dfa1ec90ad0da476410073ab48ac",
+      "reason": "Synthetic address in privacy enforcement regression test; exception applies only to this test source."
+    },
+    {
+      "kind": "email",
+      "path": "scripts/security/test_public_privacy.py",
+      "sha256": "250d84f34d4a50811b8a7e6f33d7485054b496222707da4298e6f168ce2e1077",
+      "reason": "Synthetic address in privacy enforcement regression test; exception applies only to this test source."
+    },
+    {
+      "kind": "email",
+      "path": "scripts/security/test_public_privacy.py",
+      "sha256": "c4bb226077b5019327d37f076c5cce12df1f84e53ba35b43de6cea2b17a7da12",
+      "reason": "Synthetic address in privacy enforcement regression test; exception applies only to this test source."
+    },
+    {
+      "kind": "email",
+      "path": "scripts/security/test_public_privacy.py",
+      "sha256": "59d2baf10c016ebbf1dcb32f6dbc852b6d81bb5168d8f3f03fcf3a23d7333660",
+      "reason": "Synthetic address in privacy enforcement regression test; exception applies only to this test source."
+    },
+    {
+      "kind": "email",
+      "path": "scripts/security/test_public_privacy.py",
+      "sha256": "f126dd10c89387c5b853547456f480f331947e2707c4a64bde89e009b87fcc53",
+      "reason": "Synthetic address in privacy enforcement regression test; exception applies only to this test source."
+    }
+  ]
+}

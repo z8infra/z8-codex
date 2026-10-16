@@ -31,3 +31,22 @@ pnpm-workspace.yaml
 .trae/
 plan.md
 plan_v2.md
+# Private local runtime and audit data
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+**/auth.json
+**/credentials.json
+**/cookies.json
+**/cookies.txt
+*.sqlite
+*.sqlite3
+*.db
+*.har
+*.dmp
+*.p12
+*.pfx
+*.pem
+*.key
+/security-audits/

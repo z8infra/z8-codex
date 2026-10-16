@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+scanner=$(git config --local --get publicPrivacy.gitleaks || true)
+if [ -z "$scanner" ]; then scanner=gitleaks; fi
+exec python scripts/security/check-public-privacy.py --mode staged --gitleaks "$scanner"
