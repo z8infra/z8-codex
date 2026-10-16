@@ -15,7 +15,13 @@ permissions:
   contents: write
 
 jobs:
+  privacy:
+    uses: ./.github/workflows/public-privacy.yml
+    with:
+      ref: ${{ inputs.tag || github.sha }}
+
   prepare-release:
+    needs: privacy
     if: github.repository == 'z8infra/z8-codex'
     name: Create release
     runs-on: ubuntu-latest
